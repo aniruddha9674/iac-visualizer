@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: "IaC Visualizer \u2014 parse CloudFormation templates into a dependency\
+  \ graph"
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Architectures:
+    - arm64
+    Timeout: 30
+    MemorySize: 512
+Resources:
+  ParseApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+        - '*'
+        AllowMethods:
+        - POST
+        - OPTIONS
+        AllowHeaders:
+        - Content-Type
+        MaxAge: 600
+  ParseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ParseFunction
+      Handler: handlers/api.handler
+      Environment:
+        Variables:
+          BEDROCK_REGION: us-east-1
+          BEDROCK_MODEL_ID: amazon.nova-micro-v1:0
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - bedrock:InvokeModel
+          Resource:
+          - arn:aws:bedrock:*::foundation-model/amazon.nova-micro-v1:0
+          - arn:aws:bedrock:*:*:inference-profile/*
+      Events:
+        Parse:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: ParseApi
+            Path: /parse
+            Method: POST
+    Metadata:
+      SamResourceId: ParseFunction
+  AnalyzeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: AnalyzeFunction
+      Handler: handlers/analyze.handler
+      Environment:
+        Variables:
+          BEDROCK_REGION: us-east-1
+          BEDROCK_MODEL_ID: amazon.nova-micro-v1:0
+      Policies:
+      - Statement:
+        - Effect: Allow
+          Action:
+          - bedrock:InvokeModel
+          Resource:
+          - arn:aws:bedrock:*::foundation-model/amazon.nova-micro-v1:0
+        - Effect: Allow
+          Action:
+          - aws-marketplace:Subscribe
+          - aws-marketplace:ViewSubscriptions
+          Resource: '*'
+      Events:
+        Analyze:
+          Type: HttpApi
+          Properties:
+            ApiId:
+              Ref: ParseApi
+            Path: /analyze
+            Method: POST
+    Metadata:
+      SamResourceId: AnalyzeFunction
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint
+    Value:
+      Fn::Sub: https://${ParseApi}.execute-api.${AWS::Region}.amazonaws.com
