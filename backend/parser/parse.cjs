@@ -104,11 +104,19 @@ function collectRefs(value, resourceIds, out) {
   for (const v of Object.values(value)) collectRefs(v, resourceIds, out);
 }
 
-// --- CLI entry ---
-const file = process.argv[2];
-if (!file) {
-  console.error('usage: node parse.cjs <template.yaml>');
-  process.exit(1);
+function loadTemplate(filePath) {
+  const raw = fs.readFileSync(filePath, 'utf8');
+  return yaml.load(raw, { schema: CFN_SCHEMA });
 }
-const result = parseTemplate(path.resolve(file));
-console.log(JSON.stringify(result, null, 2));
+
+module.exports = { parseTemplate, loadTemplate };
+
+if (require.main === module) {
+  const file = process.argv[2];
+  if (!file) {
+    console.error('usage: node parse.cjs <template.yaml>');
+    process.exit(1);
+  }
+  const result = parseTemplate(path.resolve(file));
+  console.log(JSON.stringify(result, null, 2));
+}
