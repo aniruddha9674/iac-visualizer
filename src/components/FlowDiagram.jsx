@@ -104,7 +104,17 @@ function ResourceNode({ data, id }) {
 
 const nodeTypes = { resource: ResourceNode };
 
-export default function FlowDiagram({ nodes, edges, selectedId, onNodeClick, directIds = [], indirectIds = [] }) {
+export default function FlowDiagram({
+  nodes,
+  edges,
+  selectedId,
+  onNodeClick,
+  onConnect,
+  onConnectStart,
+  onConnectEnd,
+  directIds = [],
+  indirectIds = [],
+}) {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState([]);
 
@@ -132,16 +142,22 @@ export default function FlowDiagram({ nodes, edges, selectedId, onNodeClick, dir
 
   useEffect(() => {
     setRfEdges(
-      edges.map((e) => ({
-        ...e,
-        markerEnd: { type: MarkerType.ArrowClosed, color: '#94a3b8' },
-      }))
+      edges.map((e) => {
+        const isHypo = e.data?.hypothetical === true;
+        return {
+          ...e,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: isHypo ? '#f59e0b' : '#94a3b8',
+          },
+        };
+      })
     );
   }, [edges, setRfEdges]);
 
   return (
     <div style={{ width: '100%', height: '100%', background: '#f8fafc' }}>
-      <ReactFlow
+           <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
         onNodesChange={onNodesChange}
@@ -149,6 +165,9 @@ export default function FlowDiagram({ nodes, edges, selectedId, onNodeClick, dir
         nodeTypes={nodeTypes}
         onNodeClick={(_, node) => onNodeClick?.(node.id)}
         onPaneClick={() => onNodeClick?.(null)}
+        onConnect={(params) => onConnect?.(params)}
+        onConnectStart={(_, params) => onConnectStart?.(params)}
+        onConnectEnd={() => onConnectEnd?.()}
         fitView
         proOptions={{ hideAttribution: true }}
       >

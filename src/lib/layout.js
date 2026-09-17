@@ -27,13 +27,19 @@ export function layoutGraph(nodes, edges, direction = 'LR') {
     };
   });
 
-  const positionedEdges = edges.map((edge, i) => ({
-    id: `e-${i}-${edge.source}-${edge.target}`,
-    source: edge.source,
-    target: edge.target,
-    animated: false,
-    style: { stroke: '#94a3b8', strokeWidth: 1.5 },
-  }));
+   const positionedEdges = edges.map((edge, i) => {
+    const isHypo = edge.hypothetical === true;
+    return {
+      id: `e-${i}-${edge.source}-${edge.target}`,
+      source: edge.source,
+      target: edge.target,
+      animated: isHypo,
+      style: isHypo
+        ? { stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '5,5' }
+        : { stroke: '#94a3b8', strokeWidth: 1.5 },
+      data: { hypothetical: isHypo },
+    };
+  });
 
   return { nodes: positionedNodes, edges: positionedEdges };
 }

@@ -148,6 +148,8 @@ const [summaryLoading, setSummaryLoading] = useState(false);
 const [summaryError, setSummaryError] = useState(null);
 const [hideIam, setHideIam] = useState(false);
 const [cost, setCost] = useState(null);
+const [hypotheticalEdges, setHypotheticalEdges] = useState([]);
+const [dragHint, setDragHint] = useState('');
 
   async function handleSubmit() {
     setLoading(true);
@@ -164,6 +166,9 @@ const [cost, setCost] = useState(null);
       setRawGraph({ nodes: data.nodes, edges: data.edges });
       setFlags(data.flags || []);
       setCost(data.cost || null);
+      setSelectedId(null);
+setHypotheticalEdges([]);
+setDragHint('');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -197,15 +202,37 @@ console.log('DataBucket blast:', computeBlastRadius(data.edges, 'DataBucket'));
     setSummaryLoading(false);
   }
 }
+
+function handleConnect({ source, target }) {
+  if (!source || !target || source === target) return;
+  const existsReal = rawGraph.edges.some((e) => e.source === source && e.target === target);
+  const existsHypo = hypotheticalEdges.some((e) => e.source === source && e.target === target);
+  if (existsReal || existsHypo) return;
+  setHypotheticalEdges((prev) => [...prev, { source, target, hypothetical: true }]);
+}
+
+function handleConnectStart(params) {
+  if (params?.nodeId) setDragHint(`From: ${params.nodeId}`);
+}
+
+function handleConnectEnd() {
+  setDragHint('');
+}
+
+const effectiveEdges = useMemo(
+  () => [...rawGraph.edges, ...hypotheticalEdges],
+  [rawGraph.edges, hypotheticalEdges]
+);
+
 const filteredGraph = useMemo(() => {
-  if (!hideIam) return rawGraph;
+  if (!hideIam) return { ...rawGraph, edges: effectiveEdges };
   const isIam = (type) => typeof type === 'string' && type.startsWith('AWS::IAM::');
   const iamIds = new Set(rawGraph.nodes.filter((n) => isIam(n.type)).map((n) => n.id));
   return {
     nodes: rawGraph.nodes.filter((n) => !isIam(n.type)),
-    edges: rawGraph.edges.filter((e) => !iamIds.has(e.source) && !iamIds.has(e.target)),
+    edges: effectiveEdges.filter((e) => !iamIds.has(e.source) && !iamIds.has(e.target)),
   };
-}, [rawGraph, hideIam]);
+}, [rawGraph, effectiveEdges, hideIam]);
 
 const layouted = useMemo(() => {
   if (filteredGraph.nodes.length === 0) return { nodes: [], edges: [] };
@@ -318,6 +345,39 @@ const blast = useMemo(() => {
     {summary}
   </div>
 )}
+{hypotheticalEdges.length > 0 && (
+  <div
+    style={{
+      padding: '6px 16px',
+      background: '#fffbeb',
+      borderBottom: '1px solid #fde68a',
+      fontSize: 12,
+      color: '#92400e',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    }}
+  >
+    <span>
+      <strong>Sandbox mode:</strong> {hypotheticalEdges.length} hypothetical edge
+      {hypotheticalEdges.length > 1 ? 's' : ''} added — blast radius updated
+    </span>
+    <button
+      onClick={() => setHypotheticalEdges([])}
+      style={{
+        fontSize: 11,
+        padding: '3px 10px',
+        border: '1px solid #92400e',
+        background: 'transparent',
+        color: '#92400e',
+        borderRadius: 4,
+        cursor: 'pointer',
+      }}
+    >
+      Reset sandbox
+    </button>
+  </div>
+)}
 
 {cost && cost.total > 0 && (
   <div
@@ -362,6 +422,19 @@ const blast = useMemo(() => {
           {error}
         </div>
       )}
+      {dragHint && (
+  <div
+    style={{
+      padding: '4px 16px',
+      background: '#eff6ff',
+      borderBottom: '1px solid #bfdbfe',
+      fontSize: 11,
+      color: '#1e40af',
+    }}
+  >
+    Dragging connection {dragHint} — release on another node to add a hypothetical edge
+  </div>
+)}
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         <div style={{ flex: 1, minHeight: 0 }}>
@@ -371,13 +444,16 @@ const blast = useMemo(() => {
             </div>
           ) : (
             <FlowDiagram
-              nodes={decoratedNodes}
-              edges={layouted.edges}
-              selectedId={selectedId}
-              directIds={blast.direct}
-              indirectIds={blast.indirect}
-              onNodeClick={setSelectedId}
-            />
+  nodes={decoratedNodes}
+  edges={layouted.edges}
+  selectedId={selectedId}
+  directIds={blast.direct}
+  indirectIds={blast.indirect}
+  onNodeClick={setSelectedId}
+  onConnect={handleConnect}
+  onConnectStart={handleConnectStart}
+  onConnectEnd={handleConnectEnd}
+/>
           )}
         </div>
 
