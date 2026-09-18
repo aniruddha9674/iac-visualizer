@@ -1,0 +1,32 @@
+:root {
+  /* Surfaces */
+  --bg-canvas: #0a0f1c;
+  --bg-surface: #131a2b;
+  --bg-surface-2: #1a2235;
+  --border-hairline: #1f2a44;
+  --border-strong: #2c3855;
+
+  /* Text */
+  --text-primary: #e2e8f0;
+  --text-secondary: #b6c2d9;
+  --text-tertiary: #7a88a8;
+
+  /* Signals */
+  --signal: #6366f1;
+  --signal-dim: #4f46e5;
+
+  /* Risk rings */
+  --risk-direct: #ef4444;
+  --risk-indirect: #f97316;
+
+  /* Resource categories */
+  --cat-compute: #f59e0b;
+  --cat-storage: #3b82f6;
+  --cat-database: #8b5cf6;
+  --cat-security: #ef4444;
+  --cat-networking: #6b7280;
+  --cat-iam: #eab308;
+  --cat-messaging: #14b8a6;
+  --cat-stack: #64748b;
+  --cat-default: #94a3b8;
+}

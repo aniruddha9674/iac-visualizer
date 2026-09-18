@@ -1,0 +1,731 @@
+/* ==========================================================================
+   IaC Visualizer — design tokens & theme
+   Import this once, at the top of App.jsx:  import './styles/iac-visualizer.css'
+
+   NOTE: this is now the ONLY :root token block in the project. A second,
+   smaller block (different --signal, no --font-ui/--shadow-panel/etc.) was
+   being imported elsewhere and silently overriding these names wherever it
+   loaded last — that's what was making some accent colors and shadows look
+   inconsistent. Don't reintroduce a second :root block; add new tokens here.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* surfaces */
+  --bg-void: #0a0f1c;
+  --bg-canvas: #0d1424;
+  --bg-surface: #111827;
+  --bg-surface-raised: #161f33;
+  --bg-surface-hover: #1a2338;
+  --border-hairline: #232f47;
+  --border-hairline-soft: #1a2338;
+
+  /* text */
+  --text-primary: #e7ecf5;
+  --text-secondary: #8b96ad;
+  --text-tertiary: #5b6785;
+
+  /* signal (single interactive accent — selection, links, primary actions) */
+  --signal: #22d3ee;
+  --signal-dim: rgba(34, 211, 238, 0.14);
+  --signal-ring: rgba(34, 211, 238, 0.35);
+
+  /* risk (severity only — never used decoratively) */
+  --risk-direct: #fb3d5e;
+  --risk-direct-dim: rgba(251, 61, 94, 0.12);
+  --risk-indirect: #ff9f43;
+  --risk-indirect-dim: rgba(255, 159, 67, 0.12);
+  --safe: #34d399;
+
+  /* category hues (node left-edge + icon color) */
+  --cat-compute: #fb923c;
+  --cat-storage: #38bdf8;
+  --cat-database: #a78bfa;
+  --cat-networking: #94a3b8;
+  --cat-security: #fb3d5e;
+  --cat-iam: #eab308;
+  --cat-messaging: #2dd4bf;
+  --cat-stack: #64748b;
+  --cat-default: #7c8aad;
+
+  /* type */
+  --font-ui: 'Sora', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* elevation */
+  --shadow-panel: -8px 0 32px rgba(0, 0, 0, 0.35);
+  --shadow-float: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg-void);
+}
+
+body {
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* focus visibility — required quality floor, never removed */
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* thin, quiet scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hairline) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-hairline);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ==========================================================================
+   Motion — one vocabulary, used deliberately
+   ========================================================================== */
+
+@keyframes radar-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--pulse-color, var(--signal-ring));
+    opacity: 0.9;
+  }
+  100% {
+    box-shadow: 0 0 0 18px transparent;
+    opacity: 0;
+  }
+}
+
+.radar-pulse::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 10px;
+  pointer-events: none;
+  animation: radar-pulse 1.6s ease-out infinite;
+}
+
+.radar-pulse--direct::after {
+  --pulse-color: rgba(251, 61, 94, 0.45);
+}
+.radar-pulse--selected::after {
+  --pulse-color: var(--signal-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .radar-pulse::after {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+   React Flow theme overrides
+   ========================================================================== */
+
+.react-flow {
+  background: var(--bg-canvas);
+}
+
+.react-flow__background {
+  background: var(--bg-canvas);
+}
+
+.react-flow__edge-path {
+  stroke: #35405c;
+  stroke-width: 1.5;
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--text-secondary);
+}
+
+.react-flow__edge.iac-hypothetical .react-flow__edge-path {
+  stroke: var(--signal);
+}
+
+.react-flow__handle {
+  opacity: 0.55;
+  transition: opacity 120ms ease, transform 120ms ease;
+  border: none !important;
+}
+
+.react-flow__node:hover .react-flow__handle {
+  opacity: 1;
+  transform: scale(1.25);
+}
+
+.react-flow__controls {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-float);
+}
+.react-flow__controls-button {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-hairline-soft);
+  fill: var(--text-secondary);
+  stroke: var(--text-secondary);
+}
+.react-flow__controls-button:hover {
+  background: var(--bg-surface-hover);
+}
+
+.react-flow__minimap {
+  background: var(--bg-surface) !important;
+  border: 1px solid var(--border-hairline);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-float);
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+.iac-focus-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+  box-shadow: var(--shadow-float);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.iac-focus-btn:hover {
+  border-color: var(--signal);
+  color: var(--signal);
+}
+
+/* ==========================================================================
+   Structural layout classes
+   These replace utility-framework classes so the app renders correctly
+   whether or not Tailwind is configured in the host project. Spacing follows
+   an 8px grid (8 / 12 / 16 / 24) throughout.
+   ========================================================================== */
+
+.iac-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iac-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  margin: 0;
+  background: var(--bg-void);
+}
+
+/* toolbar */
+.iac-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-hairline);
+}
+.iac-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.iac-brand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--signal-dim);
+  color: var(--signal);
+}
+.iac-brand-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-primary);
+}
+.iac-brand-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--text-tertiary);
+  margin-top: 1px;
+}
+.iac-samples {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.iac-samples-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-right: 2px;
+}
+.iac-chip {
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  border: 1px solid var(--border-hairline);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease;
+}
+.iac-chip:hover {
+  border-color: var(--signal);
+  color: var(--text-primary);
+}
+
+/* console (template input) */
+.iac-console-wrap {
+  padding: 10px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-hairline);
+}
+.iac-console {
+  border-radius: 10px;
+  border: 1px solid var(--border-hairline);
+  background: var(--bg-canvas);
+  overflow: hidden;
+}
+.iac-console-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border-hairline-soft);
+}
+.iac-console-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #3a465f;
+}
+.iac-console-filename {
+  margin-left: 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+.iac-console textarea {
+  display: block;
+  width: 100%;
+  height: 96px;
+  resize: vertical;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  font-family: var(--font-mono);
+  background: transparent;
+  color: var(--text-primary);
+  border: none;
+  outline: none;
+}
+.iac-console-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+.iac-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* buttons */
+.iac-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 8px;
+  font-family: var(--font-ui);
+  font-weight: 600;
+  cursor: pointer;
+}
+.iac-btn-primary {
+  padding: 8px 16px;
+  font-size: 13px;
+  background: var(--signal);
+  color: #04141a;
+}
+.iac-btn-primary:disabled {
+  background: var(--bg-surface-hover);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+.iac-btn-ghost-signal {
+  padding: 7px 12px;
+  font-size: 12px;
+  background: var(--signal-dim);
+  color: var(--signal);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+}
+.iac-btn-ghost-signal:disabled {
+  background: var(--bg-surface-hover);
+  color: var(--text-tertiary);
+  border-color: var(--border-hairline);
+  cursor: wait;
+}
+.iac-btn-ghost-danger {
+  width: 100%;
+  justify-content: center;
+  padding: 9px 12px;
+  font-size: 12px;
+  background: var(--risk-direct-dim);
+  color: var(--risk-direct);
+  border: 1px solid rgba(251, 61, 94, 0.3);
+}
+
+/* action bar */
+.iac-actionbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-hairline);
+}
+.iac-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.iac-toggle input {
+  accent-color: var(--signal);
+}
+
+/* status rail */
+.iac-rail {
+  overflow: hidden;
+}
+.iac-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.iac-rail--neutral {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+}
+.iac-rail--signal {
+  background: var(--signal-dim);
+  border-bottom: 1px solid rgba(34, 211, 238, 0.3);
+  color: #a5f3fc;
+}
+.iac-rail--warn {
+  background: var(--risk-indirect-dim);
+  border-bottom: 1px solid rgba(255, 159, 67, 0.35);
+  color: #ffd7a8;
+}
+.iac-rail--danger {
+  background: var(--risk-direct-dim);
+  border-bottom: 1px solid rgba(251, 61, 94, 0.35);
+  color: #ffc2cd;
+}
+.iac-rail-fill {
+  flex: 1;
+  min-width: 0;
+}
+.iac-rail-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* cost panel */
+.iac-cost {
+  padding: 8px 16px;
+  font-size: 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-hairline);
+  color: var(--text-secondary);
+}
+.iac-cost-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.iac-cost-value {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.iac-cost-breakdown {
+  margin-top: 6px;
+  padding-left: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.iac-cost-breakdown-row {
+  padding: 2px 0;
+}
+.iac-cost summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* canvas + empty state */
+.iac-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.iac-canvas {
+  flex: 1;
+  min-height: 0;
+}
+.iac-empty {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+}
+.iac-empty-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* inspector panel */
+.iac-panel {
+  width: 340px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-hairline);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-panel);
+  overflow-y: auto;
+  font-size: 12px;
+}
+.iac-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 16px 0;
+}
+.iac-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+.iac-panel-sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 3px;
+}
+.iac-panel-close {
+  flex-shrink: 0;
+  padding: 3px;
+  border-radius: 6px;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.iac-panel-section {
+  padding: 16px 16px 0;
+}
+.iac-label {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.iac-card {
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-hairline-soft);
+}
+.iac-blast-total {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.iac-blast-count {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.iac-blast-caption {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.iac-blast-split {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 11px;
+}
+.iac-blast-list {
+  margin-top: 10px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  line-height: 1.6;
+}
+.iac-flags {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.iac-flag-card {
+  border-radius: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid;
+}
+.iac-flag-card--high {
+  background: var(--risk-direct-dim);
+  border-left-color: var(--risk-direct);
+}
+.iac-flag-card--medium {
+  background: var(--risk-indirect-dim);
+  border-left-color: var(--risk-indirect);
+}
+.iac-flag-meta {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+.iac-flag-meta--high {
+  color: var(--risk-direct);
+}
+.iac-flag-meta--medium {
+  color: var(--risk-indirect);
+}
+.iac-flag-msg {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.iac-properties {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-hairline-soft);
+}
+.iac-panel-footer {
+  margin: 20px 16px 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-hairline-soft);
+}
+.iac-delete-note {
+  margin-top: 6px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+/* graph node */
+.iac-node {
+  position: relative;
+  width: 100%;
+  border-radius: 10px;
+  font-family: var(--font-ui);
+  cursor: grab;
+  transition: opacity 150ms ease, box-shadow 150ms ease;
+}
+.iac-node-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.iac-node-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 5px;
+}
+.iac-node-text {
+  min-width: 0;
+}
+.iac-node-label {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.iac-node-type {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.3;
+  font-family: var(--font-mono);
+}
+.iac-node-flag {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--risk-direct);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
