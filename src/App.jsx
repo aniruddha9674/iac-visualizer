@@ -277,6 +277,11 @@ export default function App() {
     return computeBlastRadius(filteredGraph.edges, selectedId);
   }, [selectedId, filteredGraph.edges]);
 
+  const outgoingDeps = useMemo(() => {
+  if (!selectedId) return [];
+  return filteredGraph.edges.filter((e) => e.source === selectedId);
+}, [selectedId, filteredGraph.edges]);
+
   const flagsByResource = useMemo(() => {
     const m = new Map();
     for (const f of flags) {
@@ -771,6 +776,64 @@ export default function App() {
             <div style={{ fontSize: 11, color: 'var(--text-tertiary, #7a88a8)', marginTop: 2 }}>
               {selectedNode.type}
             </div>
+            {outgoingDeps.length > 0 && (
+  <div style={{ marginTop: 16 }}>
+    <div
+      style={{
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--text-primary, #e2e8f0)',
+        marginBottom: 6,
+      }}
+    >
+      REFERENCES
+    </div>
+    <div
+      style={{
+        background: 'var(--bg-canvas, #0a0f1c)',
+        padding: 10,
+        borderRadius: 6,
+        border: '1px solid var(--border-hairline, #1f2a44)',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          color: 'var(--text-tertiary, #7a88a8)',
+          marginBottom: 6,
+        }}
+      >
+        {outgoingDeps.length} resource{outgoingDeps.length !== 1 ? 's' : ''} this depends on
+      </div>
+      {outgoingDeps.map((e) => (
+        <div key={e.target} style={{ marginBottom: 3, fontSize: 11 }}>
+          <button
+            onClick={() => setSelectedId(e.target)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              color: 'var(--text-secondary, #b6c2d9)',
+              fontFamily: 'inherit',
+              fontSize: 11,
+              textDecoration: 'underline',
+              textDecorationStyle: 'dotted',
+              textUnderlineOffset: 3,
+            }}
+          >
+            {e.target}
+          </button>
+          {e.path && (
+            <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
+              — <code style={{ fontSize: 9 }}>{e.path}</code>
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 
             <div style={{ marginTop: 16 }}>
               <div
