@@ -811,15 +811,49 @@ export default function App() {
                   )}
                 </div>
                 {blast.direct.length > 0 && (
-                  <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-tertiary, #7a88a8)' }}>
-                    Direct: {blast.direct.join(', ')}
-                  </div>
-                )}
+  <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-tertiary, #7a88a8)' }}>
+    <div style={{ fontWeight: 600, marginBottom: 3 }}>Direct:</div>
+    {blast.direct.map((id) => {
+      const edge = filteredGraph.edges.find(
+        (e) => e.source === id && e.target === selectedId
+      );
+      return (
+        <div key={id} style={{ marginLeft: 8, marginBottom: 2 }}>
+          <span style={{ color: 'var(--text-secondary, #b6c2d9)' }}>{id}</span>
+          {edge?.path && (
+  <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
+    {' — '}
+    <code style={{ fontSize: 9 }}>{edge.path}</code>
+  </span>
+)}
+        </div>
+      );
+    })}
+  </div>
+)}
                 {blast.indirect.length > 0 && (
-                  <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-tertiary, #7a88a8)' }}>
-                    Indirect: {blast.indirect.join(', ')}
-                  </div>
-                )}
+  <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-tertiary, #7a88a8)' }}>
+    <div style={{ fontWeight: 600, marginBottom: 3 }}>Indirect:</div>
+    {blast.indirect.map((id) => {
+      // Find an edge from an immediate dependent to this node
+      const via = filteredGraph.edges.find(
+        (e) => e.target === id &&
+          (blast.direct.includes(e.source) || selectedId === e.source)
+      );
+      return (
+        <div key={id} style={{ marginLeft: 8, marginBottom: 2 }}>
+          <span style={{ color: 'var(--text-secondary, #b6c2d9)' }}>{id}</span>
+          {via && (
+            <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
+              {' — via '}
+              <code style={{ fontSize: 9 }}>{via.source}</code>
+            </span>
+          )}
+        </div>
+      );
+    })}
+  </div>
+)} 
                 {(hypotheticalEdges.length > 0 || deletedNodes.length > 0) && (
                   <div
                     style={{
