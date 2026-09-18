@@ -1,39 +1,36 @@
+import { motion } from 'framer-motion';
+
 export default function TemplateInput({ value, onChange, onSubmit, loading }) {
+  const lineCount = value.trim() ? value.trim().split('\n').length : 0;
+
   return (
-    <div style={{ padding: 16, borderBottom: '1px solid #e2e8f0', background: 'white' }}>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="Paste a CloudFormation template here (YAML or JSON)"
-        style={{
-          width: '100%',
-          height: 120,
-          fontFamily: 'ui-monospace, monospace',
-          fontSize: 12,
-          padding: 8,
-          border: '1px solid #cbd5e1',
-          borderRadius: 6,
-          resize: 'vertical',
-          boxSizing: 'border-box',
-        }}
-      />
-      <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button
+    <div className="iac-console-wrap">
+      <div className="iac-console">
+        <div className="iac-console-bar">
+          <span className="iac-console-dot" />
+          <span className="iac-console-dot" />
+          <span className="iac-console-dot" />
+          <span className="iac-console-filename">template.yaml</span>
+        </div>
+
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Paste a CloudFormation template here (YAML or JSON)"
+          spellCheck={false}
+        />
+      </div>
+
+      <div className="iac-console-footer">
+        <motion.button
           onClick={onSubmit}
           disabled={loading || !value.trim()}
-          style={{
-            padding: '8px 16px',
-            background: loading ? '#94a3b8' : '#0f172a',
-            color: 'white',
-            border: 'none',
-            borderRadius: 6,
-            cursor: loading ? 'wait' : 'pointer',
-            fontSize: 13,
-            fontWeight: 600,
-          }}
+          whileTap={{ scale: 0.97 }}
+          className="iac-btn iac-btn-primary"
         >
-          {loading ? 'Parsing...' : 'Visualize'}
-        </button>
+          {loading ? 'Parsing\u2026' : 'Visualize'}
+        </motion.button>
+        <span className="iac-meta">{lineCount ? `${lineCount} lines` : 'No template loaded'}</span>
       </div>
     </div>
   );
