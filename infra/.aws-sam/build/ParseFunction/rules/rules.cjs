@@ -1,6 +1,15 @@
 // backend/rules/rules.cjs
 const SENSITIVE_PORTS = new Set([22, 3389, 3306, 5432, 6379, 27017, 9200]);
 
+const OVERPERMISSIVE_MANAGED_POLICY_PATTERN =
+  /^(AdministratorAccess|PowerUserAccess|IAMFullAccess|[A-Za-z0-9_]+FullAccess)$/;
+
+const OVERPERMISSIVE_ALWAYS_HIGH = new Set([
+  'AdministratorAccess',
+  'PowerUserAccess',
+  'IAMFullAccess',
+]);
+
 function toArray(v) {
   if (v == null) return [];
   return Array.isArray(v) ? v : [v];
@@ -21,6 +30,34 @@ function collectPolicies(def) {
     else if (top.Statement) stmts.push(top.Statement);
   }
   return stmts;
+}
+
+function checkManagedPolicies(template) {
+  const flags = [];
+  for (const [resourceId, resource] of Object.entries(template.Resources || {})) {
+    if (resource.Type !== 'AWS::IAM::Role' && resource.Type !== 'AWS::IAM::User') continue;
+
+    const arns = resource.Properties?.ManagedPolicyArns || [];
+    for (const arnRef of arns) {
+      // ManagedPolicyArns entries are usually plain ARN strings for AWS
+      // managed policies, but can be a !Ref or !Sub to a customer-managed
+      // policy. Only flag entries we can read as strings — we can't inspect
+      // the ARN shape of a resolved reference.
+      if (typeof arnRef !== 'string') continue;
+
+      const policyName = arnRef.split('/').pop();
+      if (OVERPERMISSIVE_MANAGED_POLICY_PATTERN.test(policyName)) {
+        flags.push({
+          ruleId: 'IAM_MANAGED_POLICY_OVERPERMISSIVE',
+          severity: OVERPERMISSIVE_ALWAYS_HIGH.has(policyName) ? 'high' : 'medium',
+          resourceId,
+          message: `${resourceId} attaches the managed policy "${policyName}", which grants broader access than most workloads need.`,
+          detail: { policyArn: arnRef, policyName },
+        });
+      }
+    }
+  }
+  return flags;
 }
 
 const RULES = [
@@ -131,6 +168,11 @@ const RULES = [
       }
       return flags;
     },
+  },
+    {
+    id: 'IAM_MANAGED_POLICY_OVERPERMISSIVE',
+    severity: 'medium',
+    run: checkManagedPolicies,
   },
     {
     id: 'RDS_PUBLICLY_ACCESSIBLE',

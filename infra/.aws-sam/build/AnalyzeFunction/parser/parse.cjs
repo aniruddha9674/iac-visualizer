@@ -81,9 +81,16 @@ function collectRefs(value, resourceIds, out) {
     out.add(value.Ref);
   }
 
-  // { 'Fn::GetAtt': ['Foo', 'Arn'] }
-  if (Array.isArray(value['Fn::GetAtt']) && value['Fn::GetAtt'].length >= 1) {
-    const name = value['Fn::GetAtt'][0];
+    // { 'Fn::GetAtt': ['Foo', 'Arn'] }  (array form)
+  // { 'Fn::GetAtt': 'Foo.Arn' }        (string form)
+  if (value['Fn::GetAtt'] != null) {
+    const ga = value['Fn::GetAtt'];
+    let name;
+    if (Array.isArray(ga)) {
+      name = ga[0];
+    } else if (typeof ga === 'string') {
+      name = ga.split('.')[0];
+    }
     if (typeof name === 'string' && resourceIds.has(name)) out.add(name);
   }
 

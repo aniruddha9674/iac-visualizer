@@ -97,6 +97,22 @@ run(
   }
 );
 
+run(
+  'managed-policies: fires high on AdministratorAccess, medium on FullAccess, none on SSM/BasicExecution',
+  `node ${rules} ${fixture('managed-policies.yaml')}`,
+  (out) => {
+    const flags = JSON.parse(out);
+    if (flags.length !== 2) return `expected 2 flags, got ${flags.length}`;
+    const admin = flags.find((f) => f.detail?.policyName === 'AdministratorAccess');
+    const s3 = flags.find((f) => f.detail?.policyName === 'AmazonS3FullAccess');
+    if (!admin) return 'missing AdministratorAccess flag';
+    if (admin.severity !== 'high') return `AdministratorAccess severity should be high, got ${admin.severity}`;
+    if (!s3) return 'missing AmazonS3FullAccess flag';
+    if (s3.severity !== 'medium') return `AmazonS3FullAccess severity should be medium, got ${s3.severity}`;
+    return true;
+  }
+);
+
 console.log('\nhandler');
 
 (async () => {

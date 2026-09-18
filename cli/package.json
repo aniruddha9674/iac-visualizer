@@ -1,0 +1,13 @@
+{
+  "name": "iac-visualizer-cli",
+  "version": "1.0.0",
+  "description": "Blast radius and misconfiguration flags for CloudFormation templates",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "iac": "./bin/iac.cjs"
+  },
+  "scripts": {
+    "test": "node test.cjs"
+  }
+}

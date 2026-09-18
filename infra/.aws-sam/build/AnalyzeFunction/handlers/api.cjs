@@ -7,7 +7,7 @@ const { parseTemplate, loadTemplate } = require('../parser/parse.cjs');
 const { computeBlastRadius } = require('../parser/blast-radius.cjs');
 const { runRules } = require('../rules/rules.cjs');
 const { estimateCost } = require('../rules/cost.cjs');
-
+const MAX_TEMPLATE_BYTES = 200 * 1024; // 200 KB — real CFN templates are far smaller
 // CloudFormation intrinsic tag schema — duplicated from parse.cjs so we can
 // parse templates that arrive in the request body (not from disk).
 const cfnTags = [
@@ -28,7 +28,8 @@ const cfnTags = [
   new yaml.Type('!Split',     { kind: 'sequence', construct: (d) => ({ 'Fn::Split': d }) }),
   new yaml.Type('!FindInMap', { kind: 'sequence', construct: (d) => ({ 'Fn::FindInMap': d }) }),
 ];
-const CFN_SCHEMA = yaml.DEFAULT_SCHEMA.extend(cfnTags);
+const { CLOUDFORMATION_SCHEMA } = require('js-yaml-cloudformation-schema');
+const CFN_SCHEMA = CLOUDFORMATION_SCHEMA;
 
 function parseTemplateFromString(yamlText) {
   const template = yaml.load(yamlText, { schema: CFN_SCHEMA });
@@ -66,6 +67,13 @@ exports.handler = async (event) => {
 
     if (!yamlText || typeof yamlText !== 'string') {
       return { statusCode: 400, headers, body: JSON.stringify({ error: 'Missing "template" field in request body' }) };
+    }
+        if (yamlText.length > MAX_TEMPLATE_BYTES) {
+      return {
+        statusCode: 413,
+        headers,
+        body: JSON.stringify({ error: `Template exceeds ${MAX_TEMPLATE_BYTES / 1024} KB limit` }),
+      };
     }
 
     // Write to a temp file so we can reuse parseTemplate's disk-based loader.
