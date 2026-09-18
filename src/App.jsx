@@ -1,4 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+// This was missing entirely — iac-visualizer.css defines every .iac-node,
+// .iac-focus-btn, .iac-console, etc. class the app relies on, but nothing
+// was importing it, so none of that styling (including node borders and
+// backgrounds) ever reached the page.
+import './styles/iac-visualizer.css';
 import TemplateInput from './components/TemplateInput.jsx';
 import FlowDiagram from './components/FlowDiagram.jsx';
 import { layoutGraph } from './lib/layout.js';
@@ -135,21 +140,23 @@ Resources:
 `,
 };
 
-
 export default function App() {
- const [yaml, setYaml] = useState(SAMPLES['VPC + EC2']);
+  const [yaml, setYaml] = useState(SAMPLES['VPC + EC2']);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [rawGraph, setRawGraph] = useState({ nodes: [], edges: [] });
   const [flags, setFlags] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [summary, setSummary] = useState('');
-const [summaryLoading, setSummaryLoading] = useState(false);
-const [summaryError, setSummaryError] = useState(null);
-const [hideIam, setHideIam] = useState(false);
-const [cost, setCost] = useState(null);
-const [hypotheticalEdges, setHypotheticalEdges] = useState([]);
-const [dragHint, setDragHint] = useState('');
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState(null);
+  const [hideIam, setHideIam] = useState(false);
+  const [cost, setCost] = useState(null);
+  const [hypotheticalEdges, setHypotheticalEdges] = useState([]);
+  const [dragHint, setDragHint] = useState('');
+  const [deletedNodes, setDeletedNodes] = useState([]);
+  const [sandboxToast, setSandboxToast] = useState(null);
+  const [isFocusMode, setIsFocusMode] = useState(false);
 
   async function handleSubmit() {
     setLoading(true);
@@ -166,83 +173,108 @@ const [dragHint, setDragHint] = useState('');
       setRawGraph({ nodes: data.nodes, edges: data.edges });
       setFlags(data.flags || []);
       setCost(data.cost || null);
-      setSelectedId(null);
-setHypotheticalEdges([]);
-setDragHint('');
+      setHypotheticalEdges([]);
+      setDeletedNodes([]);
+      setDragHint('');
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-    console.log('edges from API:', data.edges);
-console.log('DataBucket blast:', computeBlastRadius(data.edges, 'DataBucket'));
   }
 
-  
   async function generateSummary() {
-  if (rawGraph.nodes.length === 0) return;
-  setSummaryLoading(true);
-  setSummaryError(null);
-  setSummary('');
-  try {
-    const res = await fetch(`${API_URL}/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nodes: rawGraph.nodes.map((n) => ({ id: n.id, type: n.type })),
-        flags: flags,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    setSummary(data.summary || '');
-  } catch (err) {
-    setSummaryError(err.message);
-  } finally {
-    setSummaryLoading(false);
+    if (rawGraph.nodes.length === 0) return;
+    setSummaryLoading(true);
+    setSummaryError(null);
+    setSummary('');
+    try {
+      const res = await fetch(`${API_URL}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nodes: rawGraph.nodes.map((n) => ({ id: n.id, type: n.type })),
+          flags: flags,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setSummary(data.summary || '');
+    } catch (err) {
+      setSummaryError(err.message);
+    } finally {
+      setSummaryLoading(false);
+    }
   }
-}
 
-function handleConnect({ source, target }) {
-  if (!source || !target || source === target) return;
-  const existsReal = rawGraph.edges.some((e) => e.source === source && e.target === target);
-  const existsHypo = hypotheticalEdges.some((e) => e.source === source && e.target === target);
-  if (existsReal || existsHypo) return;
-  setHypotheticalEdges((prev) => [...prev, { source, target, hypothetical: true }]);
-}
+  function handleConnect({ source, target }) {
+    if (!source || !target || source === target) {
+      setSandboxToast('Cannot connect a resource to itself');
+      setTimeout(() => setSandboxToast(null), 2000);
+      return;
+    }
+    const existsReal = rawGraph.edges.some((e) => e.source === source && e.target === target);
+    const existsHypo = hypotheticalEdges.some((e) => e.source === source && e.target === target);
+    if (existsReal || existsHypo) {
+      setSandboxToast('That dependency already exists');
+      setTimeout(() => setSandboxToast(null), 2000);
+      return;
+    }
+    setHypotheticalEdges((prev) => [...prev, { source, target, hypothetical: true }]);
+  }
 
-function handleConnectStart(params) {
-  if (params?.nodeId) setDragHint(`From: ${params.nodeId}`);
-}
+  function handleConnectStart(params) {
+    if (params?.nodeId) {
+      const node = rawGraph.nodes.find((n) => n.id === params.nodeId);
+      setDragHint(`From ${params.nodeId}${node ? ` (${node.type.split('::').pop()})` : ''}`);
+    }
+  }
 
-function handleConnectEnd() {
-  setDragHint('');
-}
+  function handleConnectEnd() {
+    setDragHint('');
+  }
 
-const effectiveEdges = useMemo(
-  () => [...rawGraph.edges, ...hypotheticalEdges],
-  [rawGraph.edges, hypotheticalEdges]
-);
+  useEffect(() => {
+    if (selectedId && deletedNodes.includes(selectedId)) {
+      setSelectedId(null);
+    }
+  }, [deletedNodes, selectedId]);
 
-const filteredGraph = useMemo(() => {
-  if (!hideIam) return { ...rawGraph, edges: effectiveEdges };
-  const isIam = (type) => typeof type === 'string' && type.startsWith('AWS::IAM::');
-  const iamIds = new Set(rawGraph.nodes.filter((n) => isIam(n.type)).map((n) => n.id));
-  return {
-    nodes: rawGraph.nodes.filter((n) => !isIam(n.type)),
-    edges: effectiveEdges.filter((e) => !iamIds.has(e.source) && !iamIds.has(e.target)),
-  };
-}, [rawGraph, effectiveEdges, hideIam]);
+  useEffect(() => {
+    if (!isFocusMode) return;
+    const handler = (e) => {
+      if (e.key === 'Escape') setIsFocusMode(false);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isFocusMode]);
 
-const layouted = useMemo(() => {
-  if (filteredGraph.nodes.length === 0) return { nodes: [], edges: [] };
-  return layoutGraph(filteredGraph.nodes, filteredGraph.edges);
-}, [filteredGraph]);
+  const filteredGraph = useMemo(() => {
+    const activeNodes = rawGraph.nodes.filter((n) => !deletedNodes.includes(n.id));
+    const activeNodeIds = new Set(activeNodes.map((n) => n.id));
+    const mergedEdges = [...rawGraph.edges, ...hypotheticalEdges].filter(
+      (e) => activeNodeIds.has(e.source) && activeNodeIds.has(e.target)
+    );
 
-const blast = useMemo(() => {
-  if (!selectedId) return { direct: [], indirect: [], total: 0 };
-  return computeBlastRadius(filteredGraph.edges, selectedId);
-}, [selectedId, filteredGraph.edges]);
+    if (!hideIam) return { nodes: activeNodes, edges: mergedEdges };
+
+    const isIam = (type) => typeof type === 'string' && type.startsWith('AWS::IAM::');
+    const iamIds = new Set(activeNodes.filter((n) => isIam(n.type)).map((n) => n.id));
+    return {
+      nodes: activeNodes.filter((n) => !isIam(n.type)),
+      edges: mergedEdges.filter((e) => !iamIds.has(e.source) && !iamIds.has(e.target)),
+    };
+  }, [rawGraph, hypotheticalEdges, hideIam, deletedNodes]);
+
+  const layouted = useMemo(() => {
+    if (filteredGraph.nodes.length === 0) return { nodes: [], edges: [] };
+    return layoutGraph(filteredGraph.nodes, filteredGraph.edges);
+  }, [filteredGraph]);
+
+  const blast = useMemo(() => {
+    if (!selectedId) return { direct: [], indirect: [], total: 0 };
+    return computeBlastRadius(filteredGraph.edges, selectedId);
+  }, [selectedId, filteredGraph.edges]);
 
   const flagsByResource = useMemo(() => {
     const m = new Map();
@@ -253,7 +285,6 @@ const blast = useMemo(() => {
     return m;
   }, [flags]);
 
-  // decorate nodes with a flag indicator
   const decoratedNodes = useMemo(() => {
     return layouted.nodes.map((n) => ({
       ...n,
@@ -265,234 +296,458 @@ const blast = useMemo(() => {
   const selectedFlags = selectedId ? flagsByResource.get(selectedId) || [] : [];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', margin: 0 }}>
-     <div style={{ padding: '12px 16px', background: '#0f172a', color: 'white' }}>
-  <div style={{ fontSize: 15, fontWeight: 700 }}>IaC Visualizer</div>
-  <div style={{ fontSize: 11, color: '#94a3b8' }}>
-    CloudFormation / SAM → dependency graph + misconfiguration flags
-  </div>
-  <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-    <span style={{ fontSize: 11, color: '#64748b', alignSelf: 'center', marginRight: 4 }}>
-      Load sample:
-    </span>
-    {Object.keys(SAMPLES).map((k) => (
-      <button
-        key={k}
-        onClick={() => setYaml(SAMPLES[k])}
-        style={{
-          fontSize: 11,
-          padding: '3px 10px',
-          borderRadius: 4,
-          border: '1px solid #334155',
-          background: 'transparent',
-          color: '#cbd5e1',
-          cursor: 'pointer',
-        }}
-      >
-        {k}
-      </button>
-    ))}
-  </div>
-</div>
-
-      <TemplateInput value={yaml} onChange={setYaml} onSubmit={handleSubmit} loading={loading} />
-     {rawGraph.nodes.length > 0 && (
-  <div style={{ padding: '10px 16px', background: 'white', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 12 }}>
-    <button
-      onClick={generateSummary}
-      disabled={summaryLoading}
+    <div
       style={{
-        padding: '6px 14px',
-        background: summaryLoading ? '#94a3b8' : '#7c3aed',
-        color: 'white',
-        border: 'none',
-        borderRadius: 6,
-        cursor: summaryLoading ? 'wait' : 'pointer',
-        fontSize: 12,
-        fontWeight: 600,
+        display: 'flex',
+        flexDirection: 'column',
+        // was height: '100vh'. A fixed height forced every status bar
+        // (sandbox toast, cost panel, summary, drag hint, tip banner) to
+        // eat into the canvas's share of the viewport, squeezing the
+        // graph shorter and shorter until it felt cramped. minHeight lets
+        // the page grow and scroll instead, while the canvas keeps its
+        // own floor below.
+        minHeight: '100vh',
+        margin: 0,
+        background: 'var(--bg-canvas, #0a0f1c)',
+        color: 'var(--text-primary, #e2e8f0)',
+        fontFamily: 'system-ui, sans-serif',
       }}
     >
-      {summaryLoading ? 'Analyzing...' : '✨ Generate AI Summary'}
-    </button>
-
-    <label style={{ fontSize: 12, color: '#334155', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
-      <input
-        type="checkbox"
-        checked={hideIam}
-        onChange={(e) => setHideIam(e.target.checked)}
-      />
-      Hide IAM resources
-    </label>
-  </div>
-)}
-    {summaryError && (
-  <div style={{ padding: '8px 16px', fontSize: 12, color: '#b91c1c', background: '#fef2f2', borderBottom: '1px solid #fecaca' }}>
-    {summaryError}
-  </div>
-)}
-
-{summary && (
-  <div
-    style={{
-      padding: '12px 16px',
-      background: '#faf5ff',
-      borderBottom: '1px solid #e9d5ff',
-      fontSize: 13,
-      color: '#3b0764',
-      lineHeight: 1.5,
-    }}
-  >
-    {summary}
-  </div>
-)}
-{hypotheticalEdges.length > 0 && (
-  <div
-    style={{
-      padding: '6px 16px',
-      background: '#fffbeb',
-      borderBottom: '1px solid #fde68a',
-      fontSize: 12,
-      color: '#92400e',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-    }}
-  >
-    <span>
-      <strong>Sandbox mode:</strong> {hypotheticalEdges.length} hypothetical edge
-      {hypotheticalEdges.length > 1 ? 's' : ''} added — blast radius updated
-    </span>
-    <button
-      onClick={() => setHypotheticalEdges([])}
-      style={{
-        fontSize: 11,
-        padding: '3px 10px',
-        border: '1px solid #92400e',
-        background: 'transparent',
-        color: '#92400e',
-        borderRadius: 4,
-        cursor: 'pointer',
-      }}
-    >
-      Reset sandbox
-    </button>
-  </div>
-)}
-
-{cost && cost.total > 0 && (
-  <div
-    style={{
-      padding: '10px 16px',
-      background: '#f8fafc',
-      borderBottom: '1px solid #e2e8f0',
-      fontSize: 12,
-      color: '#334155',
-    }}
-  >
-    <span style={{ fontWeight: 700 }}>Estimated cost:</span>{' '}
-    <span style={{ fontWeight: 700, color: '#0f172a' }}>
-      ~${cost.total.toFixed(2)}/month
-    </span>
-    <span style={{ color: '#64748b', marginLeft: 8 }}>
-      (rough heuristic, not a bill)
-    </span>
-    {cost.unknownCount > 0 && (
-      <span style={{ color: '#94a3b8', marginLeft: 8 }}>
-        · {cost.unknownCount} resource type{cost.unknownCount > 1 ? 's' : ''} not costed
-      </span>
-    )}
-    {cost.breakdown.length > 0 && (
-      <details style={{ marginTop: 6 }}>
-        <summary style={{ cursor: 'pointer', color: '#475569', fontSize: 11 }}>
-          Breakdown ({cost.breakdown.length} resource{cost.breakdown.length > 1 ? 's' : ''})
-        </summary>
-        <div style={{ marginTop: 6, fontSize: 11, color: '#475569', paddingLeft: 8 }}>
-          {cost.breakdown.map((b) => (
-            <div key={b.id}>
-              • <strong>{b.id}</strong> ({b.type}): ~${b.monthly.toFixed(2)}/mo
-            </div>
-          ))}
-        </div>
-      </details>
-    )}
-  </div>
-)}
-      {error && (
-        <div style={{ padding: 12, background: '#fef2f2', color: '#b91c1c', fontSize: 12, borderBottom: '1px solid #fecaca' }}>
-          {error}
+      {sandboxToast && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 20,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '8px 16px',
+            background: 'var(--bg-surface, #131a2b)',
+            color: 'var(--text-primary, #e2e8f0)',
+            fontSize: 12,
+            borderRadius: 6,
+            border: '1px solid var(--border-hairline, #1f2a44)',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+            zIndex: 9999,
+          }}
+        >
+          {sandboxToast}
         </div>
       )}
-      {dragHint && (
-  <div
-    style={{
-      padding: '4px 16px',
-      background: '#eff6ff',
-      borderBottom: '1px solid #bfdbfe',
-      fontSize: 11,
-      color: '#1e40af',
-    }}
-  >
-    Dragging connection {dragHint} — release on another node to add a hypothetical edge
-  </div>
-)}
+
+      {!isFocusMode && (
+        <>
+          <div
+            style={{
+              padding: '12px 16px',
+              background: 'var(--bg-surface, #131a2b)',
+              borderBottom: '1px solid var(--border-hairline, #1f2a44)',
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary, #e2e8f0)' }}>
+              IaC Visualizer
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary, #7a88a8)', marginTop: 2 }}>
+              CloudFormation / SAM → dependency graph + misconfiguration flags
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+              <span
+                style={{
+                  fontSize: 11,
+                  color: 'var(--text-tertiary, #7a88a8)',
+                  alignSelf: 'center',
+                  marginRight: 4,
+                }}
+              >
+                Load sample:
+              </span>
+              {Object.keys(SAMPLES).map((k) => (
+                <button
+                  key={k}
+                  onClick={() => setYaml(SAMPLES[k])}
+                  style={{
+                    fontSize: 11,
+                    padding: '3px 10px',
+                    borderRadius: 4,
+                    border: '1px solid var(--border-hairline, #1f2a44)',
+                    background: 'transparent',
+                    color: 'var(--text-secondary, #b6c2d9)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <TemplateInput value={yaml} onChange={setYaml} onSubmit={handleSubmit} loading={loading} />
+
+          {rawGraph.nodes.length > 0 && (
+            <div
+              style={{
+                padding: '10px 16px',
+                background: 'var(--bg-surface, #131a2b)',
+                borderBottom: '1px solid var(--border-hairline, #1f2a44)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+              }}
+            >
+              <button
+                onClick={generateSummary}
+                disabled={summaryLoading}
+                style={{
+                  padding: '6px 14px',
+                  background: summaryLoading ? '#4b5875' : 'var(--signal, #6366f1)',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 6,
+                  cursor: summaryLoading ? 'wait' : 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                {summaryLoading ? 'Analyzing...' : '✨ Generate AI Summary'}
+              </button>
+
+              <label
+                style={{
+                  fontSize: 12,
+                  color: 'var(--text-secondary, #b6c2d9)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={hideIam}
+                  onChange={(e) => setHideIam(e.target.checked)}
+                />
+                Hide IAM resources
+              </label>
+            </div>
+          )}
+
+          {summaryError && (
+            <div
+              style={{
+                padding: '8px 16px',
+                fontSize: 12,
+                color: '#fca5a5',
+                background: 'rgba(185,28,28,0.15)',
+                borderBottom: '1px solid rgba(185,28,28,0.3)',
+              }}
+            >
+              {summaryError}
+            </div>
+          )}
+
+          {summary && (
+            <div
+              style={{
+                padding: '12px 16px',
+                background: 'rgba(99,102,241,0.1)',
+                borderBottom: '1px solid rgba(99,102,241,0.3)',
+                fontSize: 13,
+                color: 'var(--text-secondary, #b6c2d9)',
+                lineHeight: 1.5,
+              }}
+            >
+              {summary}
+            </div>
+          )}
+
+          {(hypotheticalEdges.length > 0 || deletedNodes.length > 0) && (
+            <div
+              style={{
+                padding: '6px 16px',
+                background: 'rgba(217,119,6,0.12)',
+                borderBottom: '1px solid rgba(217,119,6,0.3)',
+                fontSize: 12,
+                color: '#fbbf24',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <span>
+                <strong>Sandbox mode:</strong>{' '}
+                {hypotheticalEdges.length > 0 && (
+                  <>
+                    {hypotheticalEdges.length} hypothetical edge
+                    {hypotheticalEdges.length > 1 ? 's' : ''} added
+                  </>
+                )}
+                {hypotheticalEdges.length > 0 && deletedNodes.length > 0 && ' · '}
+                {deletedNodes.length > 0 && (
+                  <>
+                    {deletedNodes.length} resource{deletedNodes.length > 1 ? 's' : ''} simulated deleted
+                  </>
+                )}
+              </span>
+              <button
+                onClick={() => {
+                  setHypotheticalEdges([]);
+                  setDeletedNodes([]);
+                }}
+                style={{
+                  fontSize: 11,
+                  padding: '3px 10px',
+                  border: '1px solid rgba(251,191,36,0.5)',
+                  background: 'transparent',
+                  color: '#fbbf24',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                }}
+              >
+                Reset sandbox
+              </button>
+            </div>
+          )}
+
+          {cost && cost.total > 0 && (
+            <div
+              style={{
+                padding: '10px 16px',
+                background: 'var(--bg-surface, #131a2b)',
+                borderBottom: '1px solid var(--border-hairline, #1f2a44)',
+                fontSize: 12,
+                color: 'var(--text-secondary, #b6c2d9)',
+              }}
+            >
+              <span style={{ fontWeight: 700 }}>Estimated cost:</span>{' '}
+              <span style={{ fontWeight: 700, color: 'var(--text-primary, #e2e8f0)' }}>
+                ~${cost.total.toFixed(2)}/month
+              </span>
+              <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
+                (rough heuristic, not a bill)
+              </span>
+              {cost.unknownCount > 0 && (
+                <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
+                  · {cost.unknownCount} resource type{cost.unknownCount > 1 ? 's' : ''} not costed
+                </span>
+              )}
+              {cost.breakdown.length > 0 && (
+                <details style={{ marginTop: 6 }}>
+                  <summary
+                    style={{
+                      cursor: 'pointer',
+                      color: 'var(--text-secondary, #b6c2d9)',
+                      fontSize: 11,
+                    }}
+                  >
+                    Breakdown ({cost.breakdown.length} resource
+                    {cost.breakdown.length > 1 ? 's' : ''})
+                  </summary>
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: 11,
+                      color: 'var(--text-tertiary, #7a88a8)',
+                      paddingLeft: 8,
+                    }}
+                  >
+                    {cost.breakdown.map((b) => (
+                      <div key={b.id}>
+                        • <strong style={{ color: 'var(--text-secondary, #b6c2d9)' }}>{b.id}</strong>{' '}
+                        ({b.type}): ~${b.monthly.toFixed(2)}/mo
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
+
+          {error && (
+            <div
+              style={{
+                padding: 12,
+                background: 'rgba(185,28,28,0.15)',
+                color: '#fca5a5',
+                fontSize: 12,
+                borderBottom: '1px solid rgba(185,28,28,0.3)',
+              }}
+            >
+              {error}
+            </div>
+          )}
+
+          {dragHint && (
+            <div
+              style={{
+                padding: '6px 16px',
+                background: 'rgba(217,119,6,0.15)',
+                borderBottom: '1px solid rgba(217,119,6,0.4)',
+                fontSize: 12,
+                color: '#fbbf24',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span>🔗</span>
+              <span>
+                <strong>{dragHint}</strong> — release on another resource to add a hypothetical edge
+              </span>
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: '#fcd34d' }}>
+                Meaning: "source depends on target" → target changes affect source
+              </span>
+            </div>
+          )}
+
+          {rawGraph.nodes.length > 0 &&
+            hypotheticalEdges.length === 0 &&
+            deletedNodes.length === 0 && (
+              <div
+                style={{
+                  padding: '6px 16px',
+                  background: 'rgba(56,189,248,0.1)',
+                  borderBottom: '1px solid rgba(56,189,248,0.25)',
+                  fontSize: 11,
+                  color: '#7dd3fc',
+                }}
+              >
+                💡 <strong>Tip:</strong> Drag from the right dot of one resource to the left dot of
+                another to simulate a new dependency. The blast radius updates live.
+              </div>
+            )}
+        </>
+      )}
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        <div style={{ flex: 1, minHeight: 0 }}>
+        <div
+          style={
+            isFocusMode
+              ? {
+                  position: 'fixed',
+                  inset: 0,
+                  zIndex: 50,
+                  background: 'var(--bg-canvas, #0a0f1c)',
+                }
+              : {
+                  flex: 1,
+                  // Real floor instead of "whatever's left after the status
+                  // bars above". Previously flex:1 inside a fixed 100vh
+                  // shell meant the canvas could get squeezed down to a
+                  // sliver when several banners stacked up at once.
+                  minHeight: 640,
+                }
+          }
+        >
           {decoratedNodes.length === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+            <div
+              style={{
+                padding: 40,
+                textAlign: 'center',
+                color: 'var(--text-tertiary, #7a88a8)',
+                fontSize: 13,
+              }}
+            >
               Paste a template and click Visualize to see the diagram.
             </div>
           ) : (
             <FlowDiagram
-  nodes={decoratedNodes}
-  edges={layouted.edges}
-  selectedId={selectedId}
-  directIds={blast.direct}
-  indirectIds={blast.indirect}
-  onNodeClick={setSelectedId}
-  onConnect={handleConnect}
-  onConnectStart={handleConnectStart}
-  onConnectEnd={handleConnectEnd}
-/>
+              nodes={decoratedNodes}
+              edges={layouted.edges}
+              selectedId={selectedId}
+              directIds={blast.direct}
+              indirectIds={blast.indirect}
+              onNodeClick={setSelectedId}
+              onConnect={handleConnect}
+              onConnectStart={handleConnectStart}
+              onConnectEnd={handleConnectEnd}
+              isFocusMode={isFocusMode}
+              onToggleFocus={() => setIsFocusMode((f) => !f)}
+            />
           )}
         </div>
 
-        {selectedNode && (
+        {!isFocusMode && selectedNode && (
           <div
             style={{
               width: 340,
-              borderLeft: '1px solid #e2e8f0',
-              background: 'white',
+              borderLeft: '1px solid var(--border-hairline, #1f2a44)',
+              background: 'var(--bg-surface, #131a2b)',
               padding: 16,
               overflowY: 'auto',
               fontSize: 12,
+              color: 'var(--text-primary, #e2e8f0)',
               fontFamily: 'system-ui, sans-serif',
             }}
           >
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{selectedNode.id}</div>
-            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{selectedNode.type}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary, #e2e8f0)' }}>
+              {selectedNode.id}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-tertiary, #7a88a8)', marginTop: 2 }}>
+              {selectedNode.type}
+            </div>
 
             <div style={{ marginTop: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#0f172a', marginBottom: 6 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: 'var(--text-primary, #e2e8f0)',
+                  marginBottom: 6,
+                }}
+              >
                 BLAST RADIUS
               </div>
-              <div style={{ background: '#f8fafc', padding: 10, borderRadius: 6 }}>
-                <div style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>{blast.total}</div>
-                <div style={{ fontSize: 11, color: '#64748b' }}>
+              <div
+                style={{
+                  background: 'var(--bg-canvas, #0a0f1c)',
+                  padding: 10,
+                  borderRadius: 6,
+                  border: '1px solid var(--border-hairline, #1f2a44)',
+                }}
+              >
+                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-primary, #e2e8f0)' }}>
+                  {blast.total}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-tertiary, #7a88a8)' }}>
                   resources affected if this changes
                 </div>
-                <div style={{ marginTop: 8, fontSize: 11, color: '#334155' }}>
-                  <div><strong>{blast.direct.length}</strong> direct</div>
-                  <div><strong>{blast.indirect.length}</strong> indirect</div>
+                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-secondary, #b6c2d9)' }}>
+                  <div>
+                    <strong>{blast.direct.length}</strong> direct
+                  </div>
+                  <div>
+                    <strong>{blast.indirect.length}</strong> indirect
+                  </div>
                 </div>
                 {blast.direct.length > 0 && (
-                  <div style={{ marginTop: 8, fontSize: 10, color: '#64748b' }}>
+                  <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-tertiary, #7a88a8)' }}>
                     Direct: {blast.direct.join(', ')}
                   </div>
                 )}
                 {blast.indirect.length > 0 && (
-                  <div style={{ marginTop: 4, fontSize: 10, color: '#64748b' }}>
+                  <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-tertiary, #7a88a8)' }}>
                     Indirect: {blast.indirect.join(', ')}
+                  </div>
+                )}
+                {(hypotheticalEdges.length > 0 || deletedNodes.length > 0) && (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: 6,
+                      background: 'rgba(217,119,6,0.15)',
+                      borderRadius: 4,
+                      fontSize: 10,
+                      color: '#fbbf24',
+                    }}
+                  >
+                    Includes sandbox modifications
+                    {hypotheticalEdges.length > 0 &&
+                      ` · ${hypotheticalEdges.length} hypothetical edge${
+                        hypotheticalEdges.length > 1 ? 's' : ''
+                      }`}
+                    {deletedNodes.length > 0 &&
+                      ` · ${deletedNodes.length} simulated deletion${
+                        deletedNodes.length > 1 ? 's' : ''
+                      }`}
                   </div>
                 )}
               </div>
@@ -500,47 +755,118 @@ const blast = useMemo(() => {
 
             {selectedFlags.length > 0 && (
               <div style={{ marginTop: 16 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: '#0f172a', marginBottom: 6 }}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: 'var(--text-primary, #e2e8f0)',
+                    marginBottom: 6,
+                  }}
+                >
                   FLAGS
                 </div>
                 {selectedFlags.map((f, i) => (
                   <div
                     key={i}
                     style={{
-                      background: f.severity === 'high' ? '#fef2f2' : '#fffbeb',
-                      border: `1px solid ${f.severity === 'high' ? '#fecaca' : '#fde68a'}`,
+                      background: f.severity === 'high' ? 'rgba(239,68,68,0.12)' : 'rgba(217,119,6,0.12)',
+                      border: `1px solid ${
+                        f.severity === 'high' ? 'rgba(239,68,68,0.4)' : 'rgba(217,119,6,0.4)'
+                      }`,
                       borderRadius: 6,
                       padding: 10,
                       marginBottom: 8,
                     }}
                   >
-                    <div style={{ fontSize: 10, fontWeight: 700, color: f.severity === 'high' ? '#b91c1c' : '#92400e' }}>
+                    <div
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: f.severity === 'high' ? '#fca5a5' : '#fbbf24',
+                      }}
+                    >
                       {f.severity.toUpperCase()} — {f.ruleId}
                     </div>
-                    <div style={{ fontSize: 11, color: '#334155', marginTop: 4 }}>{f.message}</div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--text-secondary, #b6c2d9)',
+                        marginTop: 4,
+                      }}
+                    >
+                      {f.message}
+                    </div>
                   </div>
                 ))}
               </div>
             )}
 
             <div style={{ marginTop: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#0f172a', marginBottom: 6 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: 'var(--text-primary, #e2e8f0)',
+                  marginBottom: 6,
+                }}
+              >
                 PROPERTIES
               </div>
               <pre
                 style={{
-                  background: '#f8fafc',
+                  background: 'var(--bg-canvas, #0a0f1c)',
                   padding: 10,
                   borderRadius: 6,
+                  border: '1px solid var(--border-hairline, #1f2a44)',
                   fontSize: 10,
                   overflowX: 'auto',
                   margin: 0,
-                  color: '#334155',
+                  color: 'var(--text-secondary, #b6c2d9)',
                   maxHeight: 300,
                 }}
               >
                 {JSON.stringify(selectedNode.properties, null, 2)}
               </pre>
+            </div>
+
+            <div
+              style={{
+                marginTop: 16,
+                paddingTop: 16,
+                borderTop: '1px solid var(--border-hairline, #1f2a44)',
+              }}
+            >
+              <button
+                onClick={() => {
+                  if (!selectedId) return;
+                  setDeletedNodes((prev) =>
+                    prev.includes(selectedId) ? prev : [...prev, selectedId]
+                  );
+                }}
+                style={{
+                  width: '100%',
+                  padding: '6px 12px',
+                  background: 'rgba(239,68,68,0.12)',
+                  color: '#fca5a5',
+                  border: '1px solid rgba(239,68,68,0.4)',
+                  borderRadius: 6,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Simulate delete this resource
+              </button>
+              <div
+                style={{
+                  fontSize: 10,
+                  color: 'var(--text-tertiary, #7a88a8)',
+                  marginTop: 6,
+                  textAlign: 'center', 
+                }}
+              >
+                Shows what would break. Template unchanged.
+              </div>
             </div>
           </div>
         )}
