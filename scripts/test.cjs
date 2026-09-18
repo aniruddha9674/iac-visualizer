@@ -112,6 +112,30 @@ run(
     return true;
   }
 );
+run(
+  'permission-gap: fires PERMISSION_NOT_GRANTED when role lacks s3:',
+  `node ${rules} ${fixture('permission-gap.yaml')}`,
+  (out) => {
+    const flags = JSON.parse(out);
+    const perm = flags.find((f) => f.ruleId === 'PERMISSION_NOT_GRANTED');
+    if (!perm) return 'PERMISSION_NOT_GRANTED flag missing';
+    if (perm.resourceId !== 'ProcessFunction') return `wrong resource: ${perm.resourceId}`;
+    if (!perm.message.includes('DataBucket')) return 'message should reference DataBucket';
+    if (perm.severity !== 'high') return `expected high severity, got ${perm.severity}`;
+    return true;
+  }
+);
+
+run(
+  's3-lambda: does not fire PERMISSION_NOT_GRANTED (role grants s3:GetObject)',
+  `node ${rules} ${fixture('s3-lambda.yaml')}`,
+  (out) => {
+    const flags = JSON.parse(out);
+    const perm = flags.find((f) => f.ruleId === 'PERMISSION_NOT_GRANTED');
+    if (perm) return `unexpected PERMISSION_NOT_GRANTED on ${perm.resourceId}`;
+    return true;
+  }
+);
 
 console.log('\nhandler');
 

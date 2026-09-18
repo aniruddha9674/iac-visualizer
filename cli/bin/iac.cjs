@@ -90,7 +90,7 @@ function main(argv) {
   try {
     graph = parseTemplate(resolved);
     template = loadTemplate(resolved);
-    flags = runRules(template);
+    flags = runRules(template,graph);
   } catch (err) {
     if (jsonMode) {
       console.log(JSON.stringify({ ok: false, error: err.message }, null, 2));

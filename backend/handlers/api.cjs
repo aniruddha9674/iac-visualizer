@@ -84,7 +84,7 @@ exports.handler = async (event) => {
     const template = loadTemplate(tmp);
     fs.unlinkSync(tmp);
 
-    const flags = runRules(template);
+    const flags = runRules(template,graph);
 
         return {
       statusCode: 200,
