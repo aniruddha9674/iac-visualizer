@@ -1,4 +1,4 @@
-```markdown
+
 # Backend Reference — IaC Visualizer
 
 Technical documentation for the serverless backend of the IaC Visualizer. This file describes what the backend does, how it works, what it depends on, and where its boundaries are. It is written for someone picking up the code cold — a reviewer, a collaborator, or the future version of the author.

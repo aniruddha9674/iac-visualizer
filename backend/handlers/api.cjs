@@ -80,7 +80,23 @@ exports.handler = async (event) => {
     const tmp = path.join(os.tmpdir(), `tmpl-${Date.now()}.yaml`);
     fs.writeFileSync(tmp, yamlText, 'utf8');
 
-    const graph = parseTemplate(tmp);
+    let graph;
+    try {
+      graph = parseTemplate(tmp);
+    } catch (err) {
+      fs.unlinkSync(tmp);
+      const parseError = { error: err.reason || err.message || 'Failed to parse template' };
+      if (err.mark?.line != null && err.mark?.column != null) {
+        const sourceLine = yamlText.split(/\r?\n/)[err.mark.line] || '';
+        parseError.context = {
+          line: err.mark.line + 1,
+          column: err.mark.column,
+          snippet: sourceLine.trim().slice(0, 200),
+          pointer: `${' '.repeat(Math.max(0, err.mark.column))}^`,
+        };
+      }
+      return { statusCode: 400, headers, body: JSON.stringify(parseError) };
+    }
     const template = loadTemplate(tmp);
     fs.unlinkSync(tmp);
 

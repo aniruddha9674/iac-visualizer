@@ -228,6 +228,9 @@ const RULES = [
       // guessable — that's the point of this rule.
       const RESOURCE_IAM_PREFIX = {
         'AWS::S3::Bucket': 's3:',
+        'AWS::DynamoDB::Table': 'dynamodb:',
+        'AWS::SQS::Queue': 'sqs:',
+        'AWS::SNS::Topic': 'sns:',
       };
 
       const flags = [];

@@ -21,10 +21,12 @@ export function computeBlastRadius(edges, startId) {
 
   const direct = [];
   const indirect = [];
+  const depthById = {};
   for (const [id, d] of depth.entries()) {
     if (id === startId) continue;
     if (d === 1) direct.push(id);
     else indirect.push(id);
+    depthById[id] = d;
   }
-  return { direct, indirect, total: direct.length + indirect.length };
+  return { direct, indirect, total: direct.length + indirect.length, depthById };
 }

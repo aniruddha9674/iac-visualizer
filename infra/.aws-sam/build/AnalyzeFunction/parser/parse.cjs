@@ -50,11 +50,16 @@ function parseTemplate(filePath) {
 
   // 2. For each resource, walk its properties and collect resource references.
   for (const [id, def] of Object.entries(resources)) {
-    const targets = new Set();
+    const targets = new Map();
     collectRefs(def, resourceIds, targets);
-    targets.delete(id); // never self-loop
-    for (const target of targets) {
-      edges.push({ source: id, target, relationship: 'references' });
+    targets.delete(id);
+    for (const [target, path] of targets.entries()) {
+      edges.push({
+        source: id,
+        target,
+        relationship: 'references',
+        path: path || 'Properties',
+      });
     }
   }
 
@@ -66,50 +71,47 @@ function parseTemplate(filePath) {
 // references into `out`. Only names that actually exist in the template's
 // Resources section count — this filters out pseudo-parameters
 // (AWS::Region etc.), parameters, conditions, and outputs.
-function collectRefs(value, resourceIds, out) {
+function collectRefs(value, resourceIds, out, path = '') {
   if (value == null) return;
 
   if (Array.isArray(value)) {
-    for (const item of value) collectRefs(item, resourceIds, out);
+    for (let i = 0; i < value.length; i++) {
+      const p = path ? `${path}[${i}]` : `[${i}]`;
+      collectRefs(value[i], resourceIds, out, p);
+    }
     return;
   }
 
   if (typeof value !== 'object') return;
 
-  // { Ref: 'Foo' }
   if (typeof value.Ref === 'string' && resourceIds.has(value.Ref)) {
-    out.add(value.Ref);
+    if (!out.has(value.Ref)) out.set(value.Ref, path);
   }
-
-    // { 'Fn::GetAtt': ['Foo', 'Arn'] }  (array form)
-  // { 'Fn::GetAtt': 'Foo.Arn' }        (string form)
   if (value['Fn::GetAtt'] != null) {
     const ga = value['Fn::GetAtt'];
     let name;
-    if (Array.isArray(ga)) {
-      name = ga[0];
-    } else if (typeof ga === 'string') {
-      name = ga.split('.')[0];
+    if (Array.isArray(ga)) name = ga[0];
+    else if (typeof ga === 'string') name = ga.split('.')[0];
+    if (typeof name === 'string' && resourceIds.has(name)) {
+      if (!out.has(name)) out.set(name, path);
     }
-    if (typeof name === 'string' && resourceIds.has(name)) out.add(name);
   }
-
-  // { 'Fn::Sub': '${Foo}' } or { 'Fn::Sub': ['${Foo}', {...}] }
   if (value['Fn::Sub'] != null) {
     const sub = Array.isArray(value['Fn::Sub']) ? value['Fn::Sub'][0] : value['Fn::Sub'];
     if (typeof sub === 'string') {
       const re = /\$\{([A-Za-z0-9:_]+)(\.[A-Za-z0-9._]+)?\}/g;
       let m;
       while ((m = re.exec(sub)) !== null) {
-        // Only accept names that are actual resources. This is what makes
-        // AWS::StackName / AWS::Region / parameters safe.
-        if (resourceIds.has(m[1])) out.add(m[1]);
+        if (resourceIds.has(m[1]) && !out.has(m[1])) {
+          out.set(m[1], path);
+        }
       }
     }
   }
-
-  // Recurse into everything else in the object.
-  for (const v of Object.values(value)) collectRefs(v, resourceIds, out);
+  for (const [k, v] of Object.entries(value)) {
+    const p = path ? `${path}.${k}` : k;
+    collectRefs(v, resourceIds, out, p);
+  }
 }
 
 function loadTemplate(filePath) {

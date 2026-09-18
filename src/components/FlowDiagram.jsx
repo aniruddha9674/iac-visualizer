@@ -10,6 +10,7 @@ import {
   Position,
   useNodesState,
   useEdgesState,
+  useViewport,
   MarkerType,
 } from '@xyflow/react';
 // REQUIRED: without this import, React Flow's node wrappers have no
@@ -33,6 +34,14 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 
+// Zoom thresholds that reveal progressively more detail on each node. The
+// goal is "the more you zoom in, the more the node tells you" — at a wide
+// fit-view glance you get names, and as you commit to reading a subgraph you
+// get types, flag counts, then a real property value.
+const ZOOM_MINIMAL = 0.5; // below this: name + colored edge only
+const ZOOM_DETAIL = 0.9; // above this: flag-count badge, bigger handles
+const ZOOM_PROPERTY = 1.3; // above this: a property key=value line
+
 // One category → { color, icon } mapping drives node accent color, the
 // minimap, and the icon badge, so the same visual language repeats everywhere
 // instead of color and iconography drifting apart.
@@ -54,12 +63,14 @@ function categoryFor(type = '') {
 
 function ResourceNode({ data }) {
   const { color, Icon } = categoryFor(data.type);
-  // Previously this was tied to live zoom level (hidden below a threshold),
-  // but fitView settles at a different zoom for every template — dense
-  // graphs zoom out further to fit, sparse ones zoom in more — so any fixed
-  // number worked for some templates and broke for others. The type line is
-  // already truncated with an ellipsis (.iac-truncate), so it's safe to
-  // always render; it just gets small at low zoom, same as the label above it.
+  // Live zoom drives which layers of detail are painted. useViewport() is
+  // available here because nodes render inside the ReactFlow provider.
+  const { zoom } = useViewport();
+  const showType = zoom >= ZOOM_MINIMAL;
+  const showIcon = zoom >= ZOOM_MINIMAL;
+  const showFlagBadge = zoom > ZOOM_DETAIL && (data.__flagCount || 0) > 0;
+  const showProperty = zoom > ZOOM_PROPERTY && Boolean(data.__firstProp);
+  const handleSize = zoom > ZOOM_DETAIL ? 11 : 9;
 
   const isSelected = data.__selected;
   const isDirect = data.__direct;
@@ -92,29 +103,52 @@ function ResourceNode({ data }) {
         opacity: isDimmed ? 0.3 : 1,
       }}
     >
-      {hasFlag && (
+      {hasFlag && showIcon && (
         <div className="iac-node-flag">
           <TriangleAlert size={11} color="#0a0f1c" strokeWidth={2.5} />
         </div>
       )}
 
-      <Handle type="target" position={Position.Left} style={{ background: color, width: 9, height: 9 }} />
+      <Handle
+        type="target"
+        position={Position.Left}
+        style={{ background: color, width: handleSize, height: handleSize }}
+      />
 
       <div className="iac-node-body">
-        <div className="iac-node-icon" style={{ background: `${color}22`, color }}>
-          <Icon size={12} strokeWidth={2.25} />
-        </div>
+        {showIcon && (
+          <div className="iac-node-icon" style={{ background: `${color}22`, color }}>
+            <Icon size={12} strokeWidth={2.25} />
+          </div>
+        )}
         <div className="iac-node-text">
           <div className="iac-node-label iac-truncate" style={{ color: 'var(--text-primary)' }} title={data.label}>
             {data.label}
           </div>
-          <div className="iac-node-type iac-truncate" style={{ color: 'var(--text-tertiary)' }} title={data.type}>
-            {data.type}
-          </div>
+          {showType && (
+            <div className="iac-node-type iac-truncate" style={{ color: 'var(--text-tertiary)' }} title={data.type}>
+              {data.type}
+            </div>
+          )}
+          {showFlagBadge && (
+            <div className="iac-node-flagcount" title={`${data.__flagCount} flag(s)`}>
+              <TriangleAlert size={9} strokeWidth={2.5} />
+              {data.__flagCount}
+            </div>
+          )}
+          {showProperty && (
+            <div className="iac-node-prop iac-truncate" title={data.__firstProp}>
+              {data.__firstProp}
+            </div>
+          )}
         </div>
       </div>
 
-      <Handle type="source" position={Position.Right} style={{ background: color, width: 9, height: 9 }} />
+      <Handle
+        type="source"
+        position={Position.Right}
+        style={{ background: color, width: handleSize, height: handleSize }}
+      />
     </div>
   );
 }

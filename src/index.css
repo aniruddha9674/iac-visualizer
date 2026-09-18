@@ -15,6 +15,12 @@
   --signal: #6366f1;
   --signal-dim: #4f46e5;
 
+  /* Right rail + AI assistant */
+  --rail-bg: #1a2235;
+  --rail-border: #1f2a44;
+  --ai-bubble-bg: rgba(99, 102, 241, 0.12);
+  --ai-bubble-border: rgba(99, 102, 241, 0.25);
+
   /* Risk rings */
   --risk-direct: #ef4444;
   --risk-indirect: #f97316;

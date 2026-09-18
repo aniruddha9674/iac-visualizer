@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 // This was missing entirely — iac-visualizer.css defines every .iac-node,
 // .iac-focus-btn, .iac-console, etc. class the app relies on, but nothing
 // was importing it, so none of that styling (including node borders and
@@ -9,6 +9,7 @@ import FlowDiagram from './components/FlowDiagram.jsx';
 import { layoutGraph } from './lib/layout.js';
 import { computeBlastRadius } from './lib/blastRadius.js';
 import { explainFlag } from './lib/ruleExplanations.js';
+import { Sparkles, X, MousePointerClick, TriangleAlert, Flame } from 'lucide-react';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://j04hh0pkgd.execute-api.us-east-1.amazonaws.com';
 
@@ -141,16 +142,45 @@ Resources:
 `,
 };
 
+// First property key=value pair, used by the diagram's deepest zoom level.
+function firstPropertyPair(properties) {
+  if (!properties || typeof properties !== 'object') return null;
+  const key = Object.keys(properties)[0];
+  if (!key) return null;
+  const value = properties[key];
+  if (value === null || value === undefined) return null;
+  const rendered = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return `${key}: ${rendered.length > 28 ? `${rendered.slice(0, 28)}…` : rendered}`;
+}
+
+const RESOURCE_DESCRIPTIONS = {
+  'AWS::S3::Bucket': 'Object storage with a globally unique name. ~$0.023/GB/month.',
+  'AWS::Lambda::Function': 'Serverless compute. Runs on demand, billed per invocation.',
+  'AWS::EC2::SecurityGroup': 'Instance-level firewall controlling inbound and outbound traffic.',
+  'AWS::EC2::VPC': 'Isolated virtual network where AWS resources run.',
+  'AWS::EC2::Subnet': 'A network segment inside a VPC with its own routing boundary.',
+  'AWS::EC2::Instance': 'Virtual server with configurable compute, memory, and storage.',
+  'AWS::IAM::Role': 'Identity with permissions that AWS services or users can assume.',
+  'AWS::IAM::User': 'An IAM identity for a person or application.',
+  'AWS::IAM::Policy': 'A document defining allowed or denied AWS actions and resources.',
+  'AWS::RDS::DBInstance': 'Managed relational database instance with automated operations.',
+  'AWS::EC2::Volume': 'Persistent block storage volume attached to compute resources.',
+  'AWS::SQS::Queue': 'Durable message queue that decouples producers from consumers.',
+  'AWS::SNS::Topic': 'Pub/sub notification channel that fans messages out to subscribers.',
+  'AWS::DynamoDB::Table': 'Managed NoSQL table with single-digit millisecond performance.',
+  'AWS::CloudFormation::Stack': 'Nested infrastructure stack managed as one CloudFormation resource.',
+  'AWS::Serverless::Function': 'SAM shorthand for a deployable serverless function.',
+  'AWS::Serverless::SimpleTable': 'SAM shorthand for a simple DynamoDB table.',
+};
+
 export default function App() {
   const [yaml, setYaml] = useState(SAMPLES['VPC + EC2']);
   const [loading, setLoading] = useState(false);
+  const [inputExpanded, setInputExpanded] = useState(true);
   const [error, setError] = useState(null);
   const [rawGraph, setRawGraph] = useState({ nodes: [], edges: [] });
   const [flags, setFlags] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
-  const [summary, setSummary] = useState('');
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState(null);
   const [hideIam, setHideIam] = useState(false);
   const [cost, setCost] = useState(null);
   const [hypotheticalEdges, setHypotheticalEdges] = useState([]);
@@ -158,6 +188,25 @@ export default function App() {
   const [deletedNodes, setDeletedNodes] = useState([]);
   const [sandboxToast, setSandboxToast] = useState(null);
   const [isFocusMode, setIsFocusMode] = useState(false);
+  const [errorExpanded, setErrorExpanded] = useState(false);
+  const [costExpanded, setCostExpanded] = useState(false);
+  const [risksExpanded, setRisksExpanded] = useState(false);
+  const [lastParsedYaml, setLastParsedYaml] = useState(null);
+  const [sampleName, setSampleName] = useState('VPC + EC2');
+
+  // AI Assistant conversation — one source of truth for summary + Q&A.
+  const [aiMessages, setAiMessages] = useState([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiInput, setAiInput] = useState('');
+  const [showCleared, setShowCleared] = useState(false);
+
+  const hasParsedRef = useRef(false);
+  const railRef = useRef(null);
+  const aiScrollRef = useRef(null);
+
+  const hasGraph = rawGraph.nodes.length > 0;
+  const hasAssistant = aiMessages.some((m) => m.role === 'assistant');
+  const unchanged = lastParsedYaml !== null && yaml === lastParsedYaml;
 
   async function handleSubmit() {
     setLoading(true);
@@ -170,41 +219,93 @@ export default function App() {
         body: JSON.stringify({ template: yaml }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!res.ok) {
+        const parseError = new Error(data.error || `HTTP ${res.status}`);
+        parseError.context = data.context;
+        throw parseError;
+      }
       setRawGraph({ nodes: data.nodes, edges: data.edges });
       setFlags(data.flags || []);
       setCost(data.cost || null);
       setHypotheticalEdges([]);
       setDeletedNodes([]);
       setDragHint('');
+      setLastParsedYaml(yaml);
+      // Collapse the input only on the very first successful parse.
+      if (!hasParsedRef.current) {
+        hasParsedRef.current = true;
+        setInputExpanded(false);
+      }
+      // New parse resets the conversation thread.
+      setAiMessages([]);
+      setShowCleared(true);
+      setTimeout(() => setShowCleared(false), 2000);
     } catch (err) {
-      setError(err.message);
+      setError({ message: err.message, context: err.context });
     } finally {
       setLoading(false);
     }
   }
 
   async function generateSummary() {
-    if (rawGraph.nodes.length === 0) return;
-    setSummaryLoading(true);
-    setSummaryError(null);
-    setSummary('');
+    if (!hasGraph) return;
+    setAiLoading(true);
+    setAiMessages((prev) => [...prev, { role: 'system', text: 'Generating summary…' }]);
     try {
       const res = await fetch(`${API_URL}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           nodes: rawGraph.nodes.map((n) => ({ id: n.id, type: n.type })),
-          flags: flags,
+          flags,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      setSummary(data.summary || '');
+      setAiMessages((prev) => [
+        ...prev,
+        { role: 'assistant', text: data.summary || 'No summary generated.' },
+      ]);
     } catch (err) {
-      setSummaryError(err.message);
+      setAiMessages((prev) => [
+        ...prev,
+        { role: 'assistant', text: `Summary unavailable: ${err.message}` },
+      ]);
     } finally {
-      setSummaryLoading(false);
+      setAiLoading(false);
+    }
+  }
+
+  async function askQuestion() {
+    const question = aiInput.trim();
+    if (!question || !hasGraph || aiLoading) return;
+    setAiMessages((prev) => [...prev, { role: 'user', text: question }]);
+    setAiInput('');
+    setAiLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question,
+          nodes: rawGraph.nodes.map((n) => ({ id: n.id, type: n.type })),
+          edges: rawGraph.edges,
+          flags,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setAiMessages((prev) => [
+        ...prev,
+        { role: 'assistant', text: data.answer || 'No answer generated.' },
+      ]);
+    } catch (err) {
+      setAiMessages((prev) => [
+        ...prev,
+        { role: 'assistant', text: `Couldn't answer that: ${err.message}` },
+      ]);
+    } finally {
+      setAiLoading(false);
     }
   }
 
@@ -225,10 +326,7 @@ export default function App() {
   }
 
   function handleConnectStart(params) {
-    if (params?.nodeId) {
-      const node = rawGraph.nodes.find((n) => n.id === params.nodeId);
-      setDragHint(`From ${params.nodeId}${node ? ` (${node.type.split('::').pop()})` : ''}`);
-    }
+    if (params?.nodeId) setDragHint(params.nodeId);
   }
 
   function handleConnectEnd() {
@@ -241,14 +339,27 @@ export default function App() {
     }
   }, [deletedNodes, selectedId]);
 
+  // Global Escape: cancel drag, exit focus mode. Input collapse is handled
+  // locally by TemplateInput while its textarea has focus.
   useEffect(() => {
-    if (!isFocusMode) return;
     const handler = (e) => {
-      if (e.key === 'Escape') setIsFocusMode(false);
+      if (e.key !== 'Escape') return;
+      if (isFocusMode) {
+        setIsFocusMode(false);
+        return;
+      }
+      if (dragHint) setDragHint('');
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [isFocusMode]);
+  }, [isFocusMode, dragHint]);
+
+  // Keep the AI thread pinned to the newest message.
+  useEffect(() => {
+    if (aiScrollRef.current) {
+      aiScrollRef.current.scrollTop = aiScrollRef.current.scrollHeight;
+    }
+  }, [aiMessages, aiLoading]);
 
   const filteredGraph = useMemo(() => {
     const activeNodes = rawGraph.nodes.filter((n) => !deletedNodes.includes(n.id));
@@ -273,14 +384,14 @@ export default function App() {
   }, [filteredGraph]);
 
   const blast = useMemo(() => {
-    if (!selectedId) return { direct: [], indirect: [], total: 0 };
+    if (!selectedId) return { direct: [], indirect: [], total: 0, depthById: {} };
     return computeBlastRadius(filteredGraph.edges, selectedId);
   }, [selectedId, filteredGraph.edges]);
 
   const outgoingDeps = useMemo(() => {
-  if (!selectedId) return [];
-  return filteredGraph.edges.filter((e) => e.source === selectedId);
-}, [selectedId, filteredGraph.edges]);
+    if (!selectedId) return [];
+    return filteredGraph.edges.filter((e) => e.source === selectedId);
+  }, [selectedId, filteredGraph.edges]);
 
   const flagsByResource = useMemo(() => {
     const m = new Map();
@@ -294,9 +405,17 @@ export default function App() {
   const decoratedNodes = useMemo(() => {
     return layouted.nodes.map((n) => ({
       ...n,
-      data: { ...n.data, __hasFlag: flagsByResource.has(n.id) },
+      data: {
+        ...n.data,
+        __hasFlag: flagsByResource.has(n.id),
+        __flagCount: (flagsByResource.get(n.id) || []).length,
+        __firstProp: firstPropertyPair(n.properties),
+      },
+      style: blast.depthById[n.id]
+        ? { ...n.style, '--hop-depth': blast.depthById[n.id] }
+        : n.style,
     }));
-  }, [layouted.nodes, flagsByResource]);
+  }, [layouted.nodes, flagsByResource, blast.depthById]);
 
   const selectedNode = selectedId ? rawGraph.nodes.find((n) => n.id === selectedId) : null;
   const selectedFlags = selectedId ? flagsByResource.get(selectedId) || [] : [];
@@ -334,131 +453,131 @@ export default function App() {
     return total > 0 ? total : null;
   }, [selectedId, blast, cost]);
 
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        // was height: '100vh'. A fixed height forced every status bar
-        // (sandbox toast, cost panel, summary, drag hint, tip banner) to
-        // eat into the canvas's share of the viewport, squeezing the
-        // graph shorter and shorter until it felt cramped. minHeight lets
-        // the page grow and scroll instead, while the canvas keeps its
-        // own floor below.
-        minHeight: '100vh',
-        margin: 0,
-        background: 'var(--bg-canvas, #0a0f1c)',
-        color: 'var(--text-primary, #e2e8f0)',
-        fontFamily: 'system-ui, sans-serif',
-      }}
-    >
-      {sandboxToast && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 20,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            padding: '8px 16px',
-            background: 'var(--bg-surface, #131a2b)',
-            color: 'var(--text-primary, #e2e8f0)',
-            fontSize: 12,
-            borderRadius: 6,
-            border: '1px solid var(--border-hairline, #1f2a44)',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
-            zIndex: 9999,
-          }}
-        >
-          {sandboxToast}
-        </div>
-      )}
+  const sandboxActive = hypotheticalEdges.length > 0 || deletedNodes.length > 0;
+  const errorMessage = typeof error === 'string' ? error : error?.message;
+  const lastAssistant = [...aiMessages].reverse().find((m) => m.role === 'assistant');
 
+  // Zone 4 priority: error > drag > sandbox > summary > tip.
+  const statusKind = errorMessage
+    ? 'error'
+    : dragHint
+      ? 'drag'
+      : sandboxActive
+        ? 'sandbox'
+        : lastAssistant
+          ? 'summary'
+          : hasGraph
+            ? 'tip'
+            : null;
+
+  const statusMessage = {
+    error: errorMessage,
+    drag: `From ${dragHint} — release on another resource to add a hypothetical edge`,
+    sandbox: sandboxToast
+      ? sandboxToast
+      : `Sandbox: ${hypotheticalEdges.length} hypothetical edge${
+          hypotheticalEdges.length === 1 ? '' : 's'
+        } · ${deletedNodes.length} simulated deletion${deletedNodes.length === 1 ? '' : 's'}`,
+    summary: lastAssistant?.text || '',
+    tip: 'Tip: Drag from the right dot of one resource to the left dot of another to simulate a new dependency.',
+  }[statusKind];
+
+  const statusExpandable =
+    statusKind === 'error'
+      ? Boolean(errorMessage && errorMessage.length > 120) || Boolean(error?.context)
+      : false;
+
+  const visualizeDisabled = loading || !yaml.trim() || (!inputExpanded && unchanged);
+  const visualizeTitle =
+    !inputExpanded && unchanged && !loading ? 'No template changes' : undefined;
+
+  const blastPct =
+    filteredGraph.nodes.length > 0
+      ? Math.round((blast.total / filteredGraph.nodes.length) * 100)
+      : 0;
+  const flaggedInBlast = selectedId
+    ? [...blast.direct, ...blast.indirect].filter((id) => flagsByResource.has(id)).length
+    : 0;
+
+  function scrollRailIntoView() {
+    railRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  return (
+    <div className="iac-app">
       {!isFocusMode && (
         <>
-          <div
-            style={{
-              padding: '12px 16px',
-              background: 'var(--bg-surface, #131a2b)',
-              borderBottom: '1px solid var(--border-hairline, #1f2a44)',
-            }}
-          >
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary, #e2e8f0)' }}>
-              IaC Visualizer
+          {/* ---------- Zone 1: header ---------- */}
+          <header className="iac-header">
+            <div className="iac-header-left">
+              <div className="iac-header-title">IaC Visualizer</div>
+              <div className="iac-header-sub">
+                CloudFormation / SAM → dependency graph + misconfiguration flags
+              </div>
             </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary, #7a88a8)', marginTop: 2 }}>
-              CloudFormation / SAM → dependency graph + misconfiguration flags
-            </div>
-            <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: 'var(--text-tertiary, #7a88a8)',
-                  alignSelf: 'center',
-                  marginRight: 4,
-                }}
-              >
-                Load sample:
-              </span>
+            <div className="iac-header-right">
+              <span className="iac-samples-label">Load sample:</span>
               {Object.keys(SAMPLES).map((k) => (
                 <button
                   key={k}
-                  onClick={() => setYaml(SAMPLES[k])}
-                  style={{
-                    fontSize: 11,
-                    padding: '3px 10px',
-                    borderRadius: 4,
-                    border: '1px solid var(--border-hairline, #1f2a44)',
-                    background: 'transparent',
-                    color: 'var(--text-secondary, #b6c2d9)',
-                    cursor: 'pointer',
+                  className="iac-chip"
+                  onClick={() => {
+                    setYaml(SAMPLES[k]);
+                    setSampleName(k);
                   }}
                 >
                   {k}
                 </button>
               ))}
             </div>
-          </div>
+          </header>
 
-          <TemplateInput value={yaml} onChange={setYaml} onSubmit={handleSubmit} loading={loading} />
+          {/* ---------- Zone 2: input ---------- */}
+          <TemplateInput
+            value={yaml}
+            onChange={setYaml}
+            expanded={inputExpanded}
+            onExpand={() => setInputExpanded(true)}
+            onCollapse={() => setInputExpanded(false)}
+            fileName={sampleName ? `${sampleName}.yaml` : 'template.yaml'}
+            showSubmitButton={!hasGraph}
+            onSubmit={handleSubmit}
+            loading={loading}
+            hasGraph={hasGraph}
+          />
 
-          {rawGraph.nodes.length > 0 && (
-            <div
-              style={{
-                padding: '10px 16px',
-                background: 'var(--bg-surface, #131a2b)',
-                borderBottom: '1px solid var(--border-hairline, #1f2a44)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12,
-              }}
-            >
+          {/* ---------- Zone 3: action bar ---------- */}
+          {hasGraph && (
+            <div className="iac-actionbar">
               <button
-                onClick={generateSummary}
-                disabled={summaryLoading}
-                style={{
-                  padding: '6px 14px',
-                  background: summaryLoading ? '#4b5875' : 'var(--signal, #6366f1)',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: 6,
-                  cursor: summaryLoading ? 'wait' : 'pointer',
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
+                type="button"
+                className="iac-btn iac-btn--primary"
+                onClick={handleSubmit}
+                disabled={visualizeDisabled}
+                title={visualizeTitle}
               >
-                {summaryLoading ? 'Analyzing...' : '✨ Generate AI Summary'}
+                {loading ? (
+                  <>
+                    <span className="iac-spinner" aria-hidden="true" />
+                    Parsing…
+                  </>
+                ) : (
+                  'Visualize'
+                )}
               </button>
 
-              <label
-                style={{
-                  fontSize: 12,
-                  color: 'var(--text-secondary, #b6c2d9)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                }}
+              <button
+                type="button"
+                className="iac-btn iac-btn--ai"
+                onClick={generateSummary}
+                disabled={!hasGraph || aiLoading}
               >
+                ✨ Generate AI Summary
+              </button>
+
+              <div className="iac-actionbar-spacer" />
+
+              <label className="iac-toggle">
                 <input
                   type="checkbox"
                   checked={hideIam}
@@ -469,277 +588,165 @@ export default function App() {
             </div>
           )}
 
-          {summaryError && (
-            <div
-              style={{
-                padding: '8px 16px',
-                fontSize: 12,
-                color: '#fca5a5',
-                background: 'rgba(185,28,28,0.15)',
-                borderBottom: '1px solid rgba(185,28,28,0.3)',
-              }}
-            >
-              {summaryError}
-            </div>
-          )}
-
-          {summary && (
-            <div
-              style={{
-                padding: '12px 16px',
-                background: 'rgba(99,102,241,0.1)',
-                borderBottom: '1px solid rgba(99,102,241,0.3)',
-                fontSize: 13,
-                color: 'var(--text-secondary, #b6c2d9)',
-                lineHeight: 1.5,
-              }}
-            >
-              {summary}
-            </div>
-          )}
-
-          {(hypotheticalEdges.length > 0 || deletedNodes.length > 0) && (
-            <div
-              style={{
-                padding: '6px 16px',
-                background: 'rgba(217,119,6,0.12)',
-                borderBottom: '1px solid rgba(217,119,6,0.3)',
-                fontSize: 12,
-                color: '#fbbf24',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <span>
-                <strong>Sandbox mode:</strong>{' '}
-                {hypotheticalEdges.length > 0 && (
-                  <>
-                    {hypotheticalEdges.length} hypothetical edge
-                    {hypotheticalEdges.length > 1 ? 's' : ''} added
-                  </>
-                )}
-                {hypotheticalEdges.length > 0 && deletedNodes.length > 0 && ' · '}
-                {deletedNodes.length > 0 && (
-                  <>
-                    {deletedNodes.length} resource{deletedNodes.length > 1 ? 's' : ''} simulated deleted
-                  </>
-                )}
+          {/* ---------- Zone 4: status strip ---------- */}
+          {statusKind && (
+            <div className={`iac-status iac-status--${statusKind === 'drag' || statusKind === 'sandbox' ? 'warn' : statusKind}`}>
+              {statusKind === 'error' && <TriangleAlert size={13} aria-hidden="true" />}
+              <span className="iac-status-text" title={statusMessage}>
+                {statusMessage}
               </span>
-              <button
-                onClick={() => {
-                  setHypotheticalEdges([]);
-                  setDeletedNodes([]);
-                }}
-                style={{
-                  fontSize: 11,
-                  padding: '3px 10px',
-                  border: '1px solid rgba(251,191,36,0.5)',
-                  background: 'transparent',
-                  color: '#fbbf24',
-                  borderRadius: 4,
-                  cursor: 'pointer',
-                }}
-              >
-                Reset sandbox
-              </button>
-            </div>
-          )}
-
-          {cost && cost.total > 0 && (
-            <div
-              style={{
-                padding: '10px 16px',
-                background: 'var(--bg-surface, #131a2b)',
-                borderBottom: '1px solid var(--border-hairline, #1f2a44)',
-                fontSize: 12,
-                color: 'var(--text-secondary, #b6c2d9)',
-              }}
-            >
-              <span style={{ fontWeight: 700 }}>Estimated cost:</span>{' '}
-              <span style={{ fontWeight: 700, color: 'var(--text-primary, #e2e8f0)' }}>
-                ~${cost.total.toFixed(2)}/month
-              </span>
-              <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
-                (rough heuristic, not a bill)
-              </span>
-              {cost.unknownCount > 0 && (
-                <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
-                  · {cost.unknownCount} resource type{cost.unknownCount > 1 ? 's' : ''} not costed
-                </span>
+              {statusKind === 'error' && statusExpandable && (
+                <button
+                  type="button"
+                  className="iac-status-action"
+                  onClick={() => setErrorExpanded((v) => !v)}
+                >
+                  {errorExpanded ? '▲' : '▼'}
+                </button>
               )}
-              {cost.breakdown.length > 0 && (
-                <details style={{ marginTop: 6 }}>
-                  <summary
-                    style={{
-                      cursor: 'pointer',
-                      color: 'var(--text-secondary, #b6c2d9)',
-                      fontSize: 11,
-                    }}
-                  >
-                    Breakdown ({cost.breakdown.length} resource
-                    {cost.breakdown.length > 1 ? 's' : ''})
-                  </summary>
-                  <div
-                    style={{
-                      marginTop: 6,
-                      fontSize: 11,
-                      color: 'var(--text-tertiary, #7a88a8)',
-                      paddingLeft: 8,
-                    }}
-                  >
-                    {cost.breakdown.map((b) => (
-                      <div key={b.id}>
-                        • <strong style={{ color: 'var(--text-secondary, #b6c2d9)' }}>{b.id}</strong>{' '}
-                        ({b.type}): ~${b.monthly.toFixed(2)}/mo
-                      </div>
-                    ))}
-                  </div>
-                </details>
+              {statusKind === 'sandbox' && (
+                <button
+                  type="button"
+                  className="iac-status-action"
+                  onClick={() => {
+                    setHypotheticalEdges([]);
+                    setDeletedNodes([]);
+                  }}
+                >
+                  Reset
+                </button>
+              )}
+              {statusKind === 'summary' && (
+                <button type="button" className="iac-status-action" onClick={scrollRailIntoView}>
+                  View in chat
+                </button>
               )}
             </div>
           )}
 
-          {error && (
-            <div
-              style={{
-                padding: 12,
-                background: 'rgba(185,28,28,0.15)',
-                color: '#fca5a5',
-                fontSize: 12,
-                borderBottom: '1px solid rgba(185,28,28,0.3)',
-              }}
-            >
-              {error}
+          {statusKind === 'error' && errorExpanded && error?.context && (
+            <div className="iac-status-error-detail">
+              Line {error.context.line}, column {error.context.column}
+              {'\n'}
+              {error.context.snippet}
+              {'\n'}
+              {error.context.pointer}
             </div>
           )}
 
-          {dragHint && (
-            <div
-              style={{
-                padding: '6px 16px',
-                background: 'rgba(217,119,6,0.15)',
-                borderBottom: '1px solid rgba(217,119,6,0.4)',
-                fontSize: 12,
-                color: '#fbbf24',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
-              <span>🔗</span>
-              <span>
-                <strong>{dragHint}</strong> — release on another resource to add a hypothetical edge
-              </span>
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: '#fcd34d' }}>
-                Meaning: "source depends on target" → target changes affect source
-              </span>
-            </div>
-          )}
-
-          {topRisks.length > 0 && (
-            <div
-              style={{
-                padding: '10px 16px',
-                background: 'rgba(239,68,68,0.08)',
-                borderBottom: '1px solid rgba(239,68,68,0.25)',
-                fontSize: 12,
-              }}
-            >
-              <div style={{ fontWeight: 700, color: 'var(--text-primary, #e2e8f0)', marginBottom: 6 }}>
-                🔥 Highest-impact issues
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {topRisks.map((r, i) => (
+          {/* ---------- cost + top risks, side by side (40px) ---------- */}
+          {hasGraph && (cost?.total > 0 || topRisks.length > 0) && (
+            <>
+              <div className="iac-lower-row">
+                {cost?.total > 0 ? (
                   <button
-                    key={`${r.resourceId}-${r.ruleId}-${i}`}
-                    onClick={() => setSelectedId(r.resourceId)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      textAlign: 'left',
-                      background: 'transparent',
-                      border: 'none',
-                      padding: '3px 0',
-                      cursor: 'pointer',
-                      color: 'var(--text-secondary, #b6c2d9)',
-                      fontSize: 12,
-                    }}
+                    type="button"
+                    className="iac-lower-half"
+                    onClick={() => setCostExpanded((v) => !v)}
                   >
-                    <span
-                      style={{
-                        fontSize: 10,
-                        fontWeight: 700,
-                        padding: '1px 6px',
-                        borderRadius: 4,
-                        background: r.severity === 'high' ? 'rgba(239,68,68,0.2)' : 'rgba(217,119,6,0.2)',
-                        color: r.severity === 'high' ? '#fca5a5' : '#fbbf24',
-                        flexShrink: 0,
-                      }}
-                    >
-                      {r.severity.toUpperCase()}
+                    <span>
+                      <strong style={{ color: 'var(--text-primary)' }}>
+                        ~${cost.total.toFixed(2)}/mo
+                      </strong>
+                      {cost.unknownCount > 0 && (
+                        <span style={{ color: 'var(--text-tertiary)' }}>
+                          {' '}
+                          · {cost.unknownCount} not costed
+                        </span>
+                      )}
                     </span>
-                    <strong style={{ color: 'var(--text-primary, #e2e8f0)' }}>{r.resourceId}</strong>
-                    <span style={{ color: 'var(--text-tertiary, #7a88a8)' }}>
-                      — {r.blastTotal} resource{r.blastTotal !== 1 ? 's' : ''} downstream
+                    <span style={{ color: 'var(--text-tertiary)' }}>
+                      breakdown {costExpanded ? '▲' : '▼'}
                     </span>
                   </button>
-                ))}
-              </div>
-            </div>
-          )}
+                ) : (
+                  <div className="iac-lower-half" />
+                )}
 
-          {rawGraph.nodes.length > 0 &&
-            hypotheticalEdges.length === 0 &&
-            deletedNodes.length === 0 && (
-              <div
-                style={{
-                  padding: '6px 16px',
-                  background: 'rgba(56,189,248,0.1)',
-                  borderBottom: '1px solid rgba(56,189,248,0.25)',
-                  fontSize: 11,
-                  color: '#7dd3fc',
-                }}
-              >
-                💡 <strong>Tip:</strong> Drag from the right dot of one resource to the left dot of
-                another to simulate a new dependency. The blast radius updates live.
+                {topRisks.length > 0 ? (
+                  <button
+                    type="button"
+                    className="iac-lower-half"
+                    onClick={() => setRisksExpanded((v) => !v)}
+                  >
+                    <span>
+                      🔥 <strong style={{ color: 'var(--text-primary)' }}>{topRisks.length}</strong>{' '}
+                      highest-impact issue{topRisks.length === 1 ? '' : 's'}
+                    </span>
+                    <span style={{ color: 'var(--text-tertiary)' }}>
+                      {risksExpanded ? '▲' : '▼'}
+                    </span>
+                  </button>
+                ) : (
+                  <div className="iac-lower-half" />
+                )}
               </div>
-            )}
+
+              {costExpanded && cost?.breakdown?.length > 0 && (
+                <div className="iac-lower-expanded">
+                  {cost.breakdown.map((b) => (
+                    <div key={b.id}>
+                      • <strong style={{ color: 'var(--text-secondary)' }}>{b.id}</strong> ({b.type}
+                      ): ~${b.monthly.toFixed(2)}/mo
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {risksExpanded && topRisks.length > 0 && (
+                <div className="iac-lower-expanded">
+                  {topRisks.map((r, i) => (
+                    <button
+                      key={`${r.resourceId}-${r.ruleId}-${i}`}
+                      onClick={() => setSelectedId(r.resourceId)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        width: '100%',
+                        textAlign: 'left',
+                        background: 'transparent',
+                        border: 'none',
+                        padding: '3px 0',
+                        cursor: 'pointer',
+                        color: 'var(--text-secondary)',
+                        fontSize: 11,
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          padding: '1px 6px',
+                          borderRadius: 4,
+                          background:
+                            r.severity === 'high'
+                              ? 'rgba(239,68,68,0.2)'
+                              : 'rgba(217,119,6,0.2)',
+                          color: r.severity === 'high' ? '#fca5a5' : '#fbbf24',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {r.severity.toUpperCase()}
+                      </span>
+                      <strong style={{ color: 'var(--text-primary)' }}>{r.resourceId}</strong>
+                      <span style={{ color: 'var(--text-tertiary)' }}>
+                        — {r.blastTotal} resource{r.blastTotal !== 1 ? 's' : ''} downstream
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        <div
-          style={
-            isFocusMode
-              ? {
-                  position: 'fixed',
-                  inset: 0,
-                  zIndex: 50,
-                  background: 'var(--bg-canvas, #0a0f1c)',
-                }
-              : {
-                  flex: 1,
-                  // Real floor instead of "whatever's left after the status
-                  // bars above". Previously flex:1 inside a fixed 100vh
-                  // shell meant the canvas could get squeezed down to a
-                  // sliver when several banners stacked up at once.
-                  minHeight: 640,
-                }
-          }
-        >
+      {/* ---------- Zone 6 (diagram) + Zone 5 (right rail) ---------- */}
+      <div className="iac-main">
+        <div className={isFocusMode ? 'iac-focus' : 'iac-canvas'}>
           {decoratedNodes.length === 0 ? (
-            <div
-              style={{
-                padding: 40,
-                textAlign: 'center',
-                color: 'var(--text-tertiary, #7a88a8)',
-                fontSize: 13,
-              }}
-            >
-              Paste a template and click Visualize to see the diagram.
-            </div>
+            <div className="iac-empty">Paste a template and click Visualize to see the diagram.</div>
           ) : (
             <FlowDiagram
               nodes={decoratedNodes}
@@ -757,333 +764,262 @@ export default function App() {
           )}
         </div>
 
-        {!isFocusMode && selectedNode && (
-          <div
-            style={{
-              width: 340,
-              borderLeft: '1px solid var(--border-hairline, #1f2a44)',
-              background: 'var(--bg-surface, #131a2b)',
-              padding: 16,
-              overflowY: 'auto',
-              fontSize: 12,
-              color: 'var(--text-primary, #e2e8f0)',
-              fontFamily: 'system-ui, sans-serif',
-            }}
-          >
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary, #e2e8f0)' }}>
-              {selectedNode.id}
-            </div>
-            <div style={{ fontSize: 11, color: 'var(--text-tertiary, #7a88a8)', marginTop: 2 }}>
-              {selectedNode.type}
-            </div>
-            {outgoingDeps.length > 0 && (
-  <div style={{ marginTop: 16 }}>
-    <div
-      style={{
-        fontSize: 11,
-        fontWeight: 700,
-        color: 'var(--text-primary, #e2e8f0)',
-        marginBottom: 6,
-      }}
-    >
-      REFERENCES
-    </div>
-    <div
-      style={{
-        background: 'var(--bg-canvas, #0a0f1c)',
-        padding: 10,
-        borderRadius: 6,
-        border: '1px solid var(--border-hairline, #1f2a44)',
-      }}
-    >
-      <div
-        style={{
-          fontSize: 11,
-          color: 'var(--text-tertiary, #7a88a8)',
-          marginBottom: 6,
-        }}
-      >
-        {outgoingDeps.length} resource{outgoingDeps.length !== 1 ? 's' : ''} this depends on
-      </div>
-      {outgoingDeps.map((e) => (
-        <div key={e.target} style={{ marginBottom: 3, fontSize: 11 }}>
-          <button
-            onClick={() => setSelectedId(e.target)}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              padding: 0,
-              cursor: 'pointer',
-              color: 'var(--text-secondary, #b6c2d9)',
-              fontFamily: 'inherit',
-              fontSize: 11,
-              textDecoration: 'underline',
-              textDecorationStyle: 'dotted',
-              textUnderlineOffset: 3,
-            }}
-          >
-            {e.target}
-          </button>
-          {e.path && (
-            <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
-              — <code style={{ fontSize: 9 }}>{e.path}</code>
-            </span>
-          )}
-        </div>
-      ))}
-    </div>
-  </div>
-)}
-
-            <div style={{ marginTop: 16 }}>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: 'var(--text-primary, #e2e8f0)',
-                  marginBottom: 6,
-                }}
-              >
-                BLAST RADIUS
-              </div>
-              <div
-                style={{
-                  background: 'var(--bg-canvas, #0a0f1c)',
-                  padding: 10,
-                  borderRadius: 6,
-                  border: '1px solid var(--border-hairline, #1f2a44)',
-                }}
-              >
-                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-primary, #e2e8f0)' }}>
-                  {blast.total}
-                </div>
-                <div style={{ fontSize: 11, color: 'var(--text-tertiary, #7a88a8)' }}>
-                  resources affected if this changes
-                </div>
-                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-secondary, #b6c2d9)' }}>
-                  <div>
-                    <strong>{blast.direct.length}</strong> direct
-                  </div>
-                  <div>
-                    <strong>{blast.indirect.length}</strong> indirect
-                  </div>
-                  {blastCost !== null && (
-                    <div style={{ marginTop: 4, color: '#fbbf24' }}>
-                      <strong>~${blastCost.toFixed(2)}/mo</strong> across affected resources
-                    </div>
-                  )}
-                </div>
-                {blast.direct.length > 0 && (
-  <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-tertiary, #7a88a8)' }}>
-    <div style={{ fontWeight: 600, marginBottom: 3 }}>Direct:</div>
-    {blast.direct.map((id) => {
-      const edge = filteredGraph.edges.find(
-        (e) => e.source === id && e.target === selectedId
-      );
-      return (
-        <div key={id} style={{ marginLeft: 8, marginBottom: 2 }}>
-          <span style={{ color: 'var(--text-secondary, #b6c2d9)' }}>{id}</span>
-          {edge?.path && (
-  <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
-    {' — '}
-    <code style={{ fontSize: 9 }}>{edge.path}</code>
-  </span>
-)}
-        </div>
-      );
-    })}
-  </div>
-)}
-                {blast.indirect.length > 0 && (
-  <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-tertiary, #7a88a8)' }}>
-    <div style={{ fontWeight: 600, marginBottom: 3 }}>Indirect:</div>
-    {blast.indirect.map((id) => {
-      // Find an edge from an immediate dependent to this node
-      const via = filteredGraph.edges.find(
-        (e) => e.target === id &&
-          (blast.direct.includes(e.source) || selectedId === e.source)
-      );
-      return (
-        <div key={id} style={{ marginLeft: 8, marginBottom: 2 }}>
-          <span style={{ color: 'var(--text-secondary, #b6c2d9)' }}>{id}</span>
-          {via && (
-            <span style={{ color: 'var(--text-tertiary, #7a88a8)', marginLeft: 8 }}>
-              {' — via '}
-              <code style={{ fontSize: 9 }}>{via.source}</code>
-            </span>
-          )}
-        </div>
-      );
-    })}
-  </div>
-)} 
-                {(hypotheticalEdges.length > 0 || deletedNodes.length > 0) && (
-                  <div
-                    style={{
-                      marginTop: 8,
-                      padding: 6,
-                      background: 'rgba(217,119,6,0.15)',
-                      borderRadius: 4,
-                      fontSize: 10,
-                      color: '#fbbf24',
-                    }}
+        {!isFocusMode && (
+          <aside className="iac-rail" ref={railRef}>
+            {/* ---------- AI Assistant ---------- */}
+            <section className="iac-rail-panel iac-rail-panel--ai">
+              <div className="iac-panel-head">
+                <span className="iac-panel-head-left">
+                  <Sparkles size={13} aria-hidden="true" />
+                  AI Assistant
+                </span>
+                {aiMessages.length > 0 && (
+                  <button
+                    type="button"
+                    className="iac-panel-head-action"
+                    onClick={() => setAiMessages([])}
                   >
-                    Includes sandbox modifications
-                    {hypotheticalEdges.length > 0 &&
-                      ` · ${hypotheticalEdges.length} hypothetical edge${
-                        hypotheticalEdges.length > 1 ? 's' : ''
-                      }`}
-                    {deletedNodes.length > 0 &&
-                      ` · ${deletedNodes.length} simulated deletion${
-                        deletedNodes.length > 1 ? 's' : ''
-                      }`}
-                  </div>
+                    Clear
+                  </button>
                 )}
               </div>
-            </div>
 
-            {selectedFlags.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: 'var(--text-primary, #e2e8f0)',
-                    marginBottom: 6,
-                  }}
-                >
-                  FLAGS
-                </div>
-                {selectedFlags.map((f, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      background: f.severity === 'high' ? 'rgba(239,68,68,0.12)' : 'rgba(217,119,6,0.12)',
-                      border: `1px solid ${
-                        f.severity === 'high' ? 'rgba(239,68,68,0.4)' : 'rgba(217,119,6,0.4)'
-                      }`,
-                      borderRadius: 6,
-                      padding: 10,
-                      marginBottom: 8,
-                    }}
+              <div className="iac-ai-scroll" ref={aiScrollRef}>
+                {aiMessages.length === 0 && !showCleared ? (
+                  <div className="iac-ai-empty">
+                    <Sparkles size={22} aria-hidden="true" />
+                    <div className="iac-ai-empty-title">Ask about this template</div>
+                    <div className="iac-ai-empty-body">
+                      Generate a summary or ask a question about the graph. Answers are grounded in
+                      the parsed template — no invented resources.
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {showCleared && <div className="iac-ai-system">Conversation cleared</div>}
+                    {aiMessages.map((m, i) =>
+                      m.role === 'system' ? (
+                        <div key={i} className="iac-ai-system">
+                          {m.text}
+                        </div>
+                      ) : m.role === 'user' ? (
+                        <div key={i} className="iac-ai-user">
+                          {m.text}
+                        </div>
+                      ) : (
+                        <div key={i} className="iac-ai-assistant">
+                          {m.text}
+                        </div>
+                      )
+                    )}
+                    {aiLoading && <div className="iac-ai-system">Thinking…</div>}
+                  </>
+                )}
+              </div>
+
+              <div className="iac-ai-input">
+                {!hasGraph ? (
+                  <input type="text" placeholder="Load a template first" disabled />
+                ) : !hasAssistant ? (
+                  <button
+                    type="button"
+                    style={{ width: '100%' }}
+                    onClick={generateSummary}
+                    disabled={aiLoading}
                   >
-                    <div
-                      style={{
-                        fontSize: 10,
-                        fontWeight: 700,
-                        color: f.severity === 'high' ? '#fca5a5' : '#fbbf24',
+                    ✨ Generate Summary
+                  </button>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      value={aiInput}
+                      onChange={(e) => setAiInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') askQuestion();
                       }}
-                    >
-                      {f.severity.toUpperCase()} — {f.ruleId}
+                      placeholder="Ask a question…"
+                      disabled={aiLoading}
+                    />
+                    <button type="button" onClick={askQuestion} disabled={!aiInput.trim() || aiLoading}>
+                      Ask
+                    </button>
+                  </>
+                )}
+              </div>
+            </section>
+
+            {/* ---------- Inspector ---------- */}
+            <section className="iac-rail-panel iac-rail-panel--inspector">
+              <div className="iac-panel-head">
+                <span className="iac-panel-head-left">
+                  {selectedNode ? (
+                    <>
+                      <span style={{ fontFamily: 'var(--font-mono)' }}>{selectedNode.id}</span>
+                      <span style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 400 }}>
+                        {selectedNode.type}
+                      </span>
+                    </>
+                  ) : (
+                    'Inspector'
+                  )}
+                </span>
+                {selectedNode && (
+                  <button
+                    type="button"
+                    className="iac-panel-head-action"
+                    onClick={() => setSelectedId(null)}
+                    aria-label="Close inspector"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+
+              {!selectedNode ? (
+                <div className="iac-inspector-empty">
+                  <MousePointerClick size={20} aria-hidden="true" />
+                  <div>Click any resource in the diagram to inspect it</div>
+                </div>
+              ) : (
+                <>
+                  <div className="iac-inspector-scroll">
+                    {/* Blast radius headline */}
+                    <div className="iac-inspector-section">
+                      <div className="iac-blast-total">
+                        <span className="iac-blast-count">{blastPct}%</span>
+                        <span className="iac-blast-caption">of infrastructure affected</span>
+                      </div>
+                      <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
+                        {blast.total} of {filteredGraph.nodes.length} resources ·{' '}
+                        {blast.direct.length} direct, {blast.indirect.length} indirect
+                      </div>
+                      {blastCost !== null && (
+                        <div style={{ marginTop: 4, fontSize: 11, color: '#fbbf24' }}>
+                          <strong>~${blastCost.toFixed(2)}/mo</strong> across affected resources
+                        </div>
+                      )}
+                      {flaggedInBlast > 0 && (
+                        <div className="iac-flag-pill">
+                          <Flame size={10} aria-hidden="true" />
+                          {flaggedInBlast} resource{flaggedInBlast === 1 ? '' : 's'} in this blast
+                          radius have unresolved flags
+                        </div>
+                      )}
                     </div>
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: 'var(--text-secondary, #b6c2d9)',
-                        marginTop: 4,
-                      }}
-                    >
-                      {f.message}
-                    </div>
-                    {(() => {
-                      const { why, docUrl } = explainFlag(f);
-                      return (
+
+                    {/* References */}
+                    {outgoingDeps.length > 0 && (
+                      <div className="iac-inspector-section">
+                        <div className="iac-inspector-label">REFERENCES</div>
+                        {outgoingDeps.map((e) => (
+                          <div key={e.target} className="iac-ref-row">
+                            <button
+                              type="button"
+                              className="iac-ref-link"
+                              onClick={() => setSelectedId(e.target)}
+                            >
+                              {e.target}
+                            </button>
+                            <span className="iac-ref-path">
+                              — {e.path || e.relationship || 'references'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Flags */}
+                    {selectedFlags.length > 0 && (
+                      <div className="iac-inspector-section">
+                        <div className="iac-inspector-label">FLAGS</div>
+                        {selectedFlags.map((f, i) => {
+                          const { why, docUrl } = explainFlag(f);
+                          return (
+                            <div
+                              key={i}
+                              className={`iac-flag-card iac-flag-card--${
+                                f.severity === 'high' ? 'high' : 'medium'
+                              }`}
+                            >
+                              <div
+                                className={`iac-flag-meta iac-flag-meta--${
+                                  f.severity === 'high' ? 'high' : 'medium'
+                                }`}
+                              >
+                                {f.severity.toUpperCase()} — {f.ruleId}
+                              </div>
+                              <div className="iac-flag-msg">{f.message}</div>
+                              <div className="iac-flag-why">
+                                <strong style={{ color: 'var(--text-secondary)' }}>
+                                  Why this matters:{' '}
+                                </strong>
+                                {why}{' '}
+                                <a
+                                  href={docUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{ color: 'var(--signal)' }}
+                                >
+                                  Learn more →
+                                </a>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Properties */}
+                    <div className="iac-inspector-section">
+                      <div className="iac-inspector-label">PROPERTIES</div>
+                      {RESOURCE_DESCRIPTIONS[selectedNode.type] && (
                         <div
                           style={{
-                            marginTop: 6,
-                            paddingTop: 6,
-                            borderTop: '1px solid rgba(255,255,255,0.08)',
+                            marginBottom: 8,
                             fontSize: 10.5,
-                            color: 'var(--text-tertiary, #7a88a8)',
-                            lineHeight: 1.5,
+                            lineHeight: 1.4,
+                            color: 'var(--text-secondary)',
+                            fontStyle: 'italic',
                           }}
                         >
-                          <strong style={{ color: 'var(--text-secondary, #b6c2d9)' }}>Why this matters: </strong>
-                          {why}{' '}
-                          <a
-                            href={docUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ color: 'var(--signal, #6366f1)' }}
-                          >
-                            Learn more →
-                          </a>
+                          {RESOURCE_DESCRIPTIONS[selectedNode.type]}
                         </div>
-                      );
-                    })()}
+                      )}
+                      <details className="iac-inspector-properties">
+                        <summary
+                          style={{
+                            cursor: 'pointer',
+                            fontSize: 10,
+                            color: 'var(--text-tertiary)',
+                          }}
+                        >
+                          Raw properties
+                        </summary>
+                        <pre>{JSON.stringify(selectedNode.properties, null, 2)}</pre>
+                      </details>
+                    </div>
                   </div>
-                ))}
-              </div>
-            )}
 
-            <div style={{ marginTop: 16 }}>
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: 'var(--text-primary, #e2e8f0)',
-                  marginBottom: 6,
-                }}
-              >
-                PROPERTIES
-              </div>
-              <pre
-                style={{
-                  background: 'var(--bg-canvas, #0a0f1c)',
-                  padding: 10,
-                  borderRadius: 6,
-                  border: '1px solid var(--border-hairline, #1f2a44)',
-                  fontSize: 10,
-                  overflowX: 'auto',
-                  margin: 0,
-                  color: 'var(--text-secondary, #b6c2d9)',
-                  maxHeight: 300,
-                }}
-              >
-                {JSON.stringify(selectedNode.properties, null, 2)}
-              </pre>
-            </div>
-
-            <div
-              style={{
-                marginTop: 16,
-                paddingTop: 16,
-                borderTop: '1px solid var(--border-hairline, #1f2a44)',
-              }}
-            >
-              <button
-                onClick={() => {
-                  if (!selectedId) return;
-                  setDeletedNodes((prev) =>
-                    prev.includes(selectedId) ? prev : [...prev, selectedId]
-                  );
-                }}
-                style={{
-                  width: '100%',
-                  padding: '6px 12px',
-                  background: 'rgba(239,68,68,0.12)',
-                  color: '#fca5a5',
-                  border: '1px solid rgba(239,68,68,0.4)',
-                  borderRadius: 6,
-                  cursor: 'pointer',
-                  fontSize: 12,
-                  fontWeight: 600,
-                }}
-              >
-                Simulate delete this resource
-              </button>
-              <div
-                style={{
-                  fontSize: 10,
-                  color: 'var(--text-tertiary, #7a88a8)',
-                  marginTop: 6,
-                  textAlign: 'center', 
-                }}
-              >
-                Shows what would break. Template unchanged.
-              </div>
-            </div>
-          </div>
+                  {/* Sticky bottom */}
+                  <div className="iac-inspector-footer">
+                    <button
+                      type="button"
+                      className="iac-btn iac-btn--danger"
+                      onClick={() => {
+                        if (!selectedId) return;
+                        setDeletedNodes((prev) =>
+                          prev.includes(selectedId) ? prev : [...prev, selectedId]
+                        );
+                      }}
+                    >
+                      Simulate delete this resource
+                    </button>
+                  </div>
+                </>
+              )}
+            </section>
+          </aside>
         )}
       </div>
     </div>

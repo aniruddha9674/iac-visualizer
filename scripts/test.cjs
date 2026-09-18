@@ -137,6 +137,20 @@ run(
   }
 );
 
+run(
+  'permission-gap-dynamo: fires PERMISSION_NOT_GRANTED when role lacks dynamodb:',
+  `node ${rules} ${fixture('permission-gap-dynamo.yaml')}`,
+  (out) => {
+    const flags = JSON.parse(out);
+    const perm = flags.find((f) => f.ruleId === 'PERMISSION_NOT_GRANTED');
+    if (!perm) return 'PERMISSION_NOT_GRANTED flag missing';
+    if (perm.resourceId !== 'ProcessFunction') return `wrong resource: ${perm.resourceId}`;
+    if (!perm.message.includes('dynamodb:')) return 'message should reference dynamodb: prefix';
+    if (perm.detail?.requiredPrefix !== 'dynamodb:') return `wrong required prefix: ${perm.detail?.requiredPrefix}`;
+    return true;
+  }
+);
+
 console.log('\nhandler');
 
 (async () => {

@@ -215,11 +215,109 @@ const RULES = [
       return flags;
     },
   },
+    {
+    id: 'PERMISSION_NOT_GRANTED',
+    severity: 'high',
+    run(template, graph) {
+      // Start narrow: one constraint. A Lambda references an S3 bucket, but
+      // its execution role grants no s3: permissions. This will fail at
+      // runtime with AccessDenied.
+      //
+      // Additional resource types get added one at a time as the mapping is
+      // validated. AWS::CloudWatch::LogGroup → logs:, for example, is not
+      // guessable — that's the point of this rule.
+      const RESOURCE_IAM_PREFIX = {
+        'AWS::S3::Bucket': 's3:',
+      };
+
+      const flags = [];
+      if (!graph || !Array.isArray(graph.edges)) return flags;
+
+      const resources = template.Resources || {};
+
+      // Index references by source once.
+      const refsBySource = new Map();
+      for (const e of graph.edges) {
+        if (!refsBySource.has(e.source)) refsBySource.set(e.source, []);
+        refsBySource.get(e.source).push(e.target);
+      }
+
+      for (const [sourceId, sourceDef] of Object.entries(resources)) {
+        if (sourceDef.Type !== 'AWS::Lambda::Function') continue;
+
+        const roleRef = sourceDef.Properties?.Role;
+        if (!roleRef || typeof roleRef !== 'object') continue;
+
+        // Resolve role logical ID from Ref or GetAtt.
+        let roleId = null;
+        if (typeof roleRef.Ref === 'string') {
+          const t = resources[roleRef.Ref];
+          if (t && t.Type === 'AWS::IAM::Role') roleId = roleRef.Ref;
+        } else if (roleRef['Fn::GetAtt'] != null) {
+          const ga = roleRef['Fn::GetAtt'];
+          const name = Array.isArray(ga) ? ga[0] : String(ga).split('.')[0];
+          const t = resources[name];
+          if (t && t.Type === 'AWS::IAM::Role') roleId = name;
+        }
+        if (!roleId) continue;
+
+        const roleDef = resources[roleId];
+        const inlinePolicies = roleDef.Properties?.Policies || [];
+
+        // Collect granted action prefixes from inline Allow statements.
+        const granted = new Set();
+        for (const p of inlinePolicies) {
+          const doc = p.PolicyDocument;
+          if (!doc) continue;
+          const stmts = Array.isArray(doc.Statement) ? doc.Statement : [doc.Statement];
+          for (const s of stmts) {
+            if (s.Effect !== 'Allow') continue;
+            const actions = Array.isArray(s.Action) ? s.Action : [s.Action];
+            for (const a of actions) {
+              if (typeof a !== 'string') continue;
+              if (a === '*') granted.add('*');
+              else granted.add(a.split(':')[0] + ':');
+            }
+          }
+        }
+
+        // Wildcard on the whole role means nothing can be missing.
+        if (granted.has('*')) continue;
+
+        for (const targetId of refsBySource.get(sourceId) || []) {
+          if (targetId === roleId) continue;
+          const targetDef = resources[targetId];
+          if (!targetDef) continue;
+
+          const requiredPrefix = RESOURCE_IAM_PREFIX[targetDef.Type];
+          if (!requiredPrefix) continue;
+
+          if (!granted.has(requiredPrefix)) {
+            flags.push({
+              ruleId: 'PERMISSION_NOT_GRANTED',
+              severity: 'high',
+              resourceId: sourceId,
+              message: `${sourceId} references ${targetId} (${targetDef.Type}), but its execution role (${roleId}) grants no '${requiredPrefix}' permissions. This will fail at runtime with AccessDenied.`,
+              detail: {
+                roleId,
+                referencedResource: targetId,
+                referencedType: targetDef.Type,
+                requiredPrefix,
+                grantedPrefixes: [...granted],
+              },
+            });
+          }
+        }
+      }
+
+      return flags;
+    },
+  },
 ];
 
-function runRules(template) {
+function runRules(template, graph) {
   const flags = [];
-  for (const rule of RULES) flags.push(...rule.run(template));
+  for (const rule of RULES) flags.push(...rule.run(template, graph));
   return flags;
 }
 
@@ -227,12 +325,14 @@ module.exports = { runRules, RULES };
 
 if (require.main === module) {
   const path = require('node:path');
-  const { loadTemplate } = require('../parser/parse.cjs');
+  const { loadTemplate, parseTemplate } = require('../parser/parse.cjs');
   const file = process.argv[2];
   if (!file) {
     console.error('usage: node rules.cjs <template.yaml>');
     process.exit(1);
   }
-  const template = loadTemplate(path.resolve(file));
-  console.log(JSON.stringify(runRules(template), null, 2));
+  const resolved = path.resolve(file);
+  const template = loadTemplate(resolved);
+  const graph = parseTemplate(resolved);
+  console.log(JSON.stringify(runRules(template, graph), null, 2));
 }
