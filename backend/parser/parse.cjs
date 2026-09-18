@@ -26,7 +26,8 @@ const cfnTags = [
   new yaml.Type('!FindInMap', { kind: 'sequence', construct: (d) => ({ 'Fn::FindInMap': d }) }),
 ];
 
-const CFN_SCHEMA = yaml.DEFAULT_SCHEMA.extend(cfnTags);
+const { CLOUDFORMATION_SCHEMA } = require('js-yaml-cloudformation-schema');
+const CFN_SCHEMA = CLOUDFORMATION_SCHEMA;
 
 // --- Template parsing ---
 function parseTemplate(filePath) {
