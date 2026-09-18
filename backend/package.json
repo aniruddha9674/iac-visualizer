@@ -6,6 +6,6 @@
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.1134.0",
     "js-yaml": "^4.1.0",
-    "js-yaml-cloudformation-schema": "^1.0.0"
+    "js-yaml-cloudformation-schema": "1.0.0"
   }
 }
