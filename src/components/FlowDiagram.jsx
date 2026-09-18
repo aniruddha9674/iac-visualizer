@@ -1,103 +1,120 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ReactFlow,
   Background,
+  BackgroundVariant,
   Controls,
   MiniMap,
+  Panel,
   Handle,
   Position,
   useNodesState,
   useEdgesState,
   MarkerType,
 } from '@xyflow/react';
+// REQUIRED: without this import, React Flow's node wrappers have no
+// position/sizing CSS at all — nodes render with no visible box and pile
+// up in DOM order instead of respecting the dagre-computed x/y from
+// layout.js. This single line is what was causing "boxes are gone" and
+// most of the "everything clustered in one place" symptoms.
+import '@xyflow/react/dist/style.css';
+import {
+  Server,
+  Database,
+  Network,
+  ShieldAlert,
+  KeyRound,
+  Radio,
+  Layers,
+  Box,
+  TriangleAlert,
+  Maximize2,
+  Minimize2,
+} from 'lucide-react';
+import clsx from 'clsx';
 
-const CATEGORY_COLORS = {
-  'AWS::Lambda::Function': '#f59e0b',
-  'AWS::S3::Bucket': '#3b82f6',
-  'AWS::DynamoDB::Table': '#8b5cf6',
-  'AWS::EC2::Instance': '#10b981',
-  'AWS::EC2::VPC': '#6b7280',
-  'AWS::EC2::Subnet': '#9ca3af',
-  'AWS::EC2::SecurityGroup': '#ef4444',
-  'AWS::IAM::Role': '#eab308',
-  'AWS::IAM::Policy': '#eab308',
-  'AWS::SQS::Queue': '#14b8a6',
-  'AWS::SNS::Topic': '#ec4899',
-  'AWS::CloudFormation::Stack': '#64748b',
-};
+// One category → { color, icon } mapping drives node accent color, the
+// minimap, and the icon badge, so the same visual language repeats everywhere
+// instead of color and iconography drifting apart.
+const CATEGORY_RULES = [
+  { test: (t) => t.startsWith('AWS::Lambda::') || t === 'AWS::EC2::Instance', color: 'var(--cat-compute)', Icon: Server },
+  { test: (t) => t.startsWith('AWS::S3::'), color: 'var(--cat-storage)', Icon: Database },
+  { test: (t) => t.startsWith('AWS::DynamoDB::') || t.startsWith('AWS::RDS::'), color: 'var(--cat-database)', Icon: Database },
+  { test: (t) => t.startsWith('AWS::EC2::SecurityGroup'), color: 'var(--cat-security)', Icon: ShieldAlert },
+  { test: (t) => t.startsWith('AWS::EC2::'), color: 'var(--cat-networking)', Icon: Network },
+  { test: (t) => t.startsWith('AWS::IAM::'), color: 'var(--cat-iam)', Icon: KeyRound },
+  { test: (t) => t.startsWith('AWS::SQS::') || t.startsWith('AWS::SNS::'), color: 'var(--cat-messaging)', Icon: Radio },
+  { test: (t) => t.startsWith('AWS::CloudFormation::Stack'), color: 'var(--cat-stack)', Icon: Layers },
+];
 
-function colorForType(type) {
-  if (!type) return '#94a3b8';
-  if (CATEGORY_COLORS[type]) return CATEGORY_COLORS[type];
-  if (type.startsWith('AWS::IAM::')) return '#eab308';
-  if (type.startsWith('AWS::EC2::')) return '#6b7280';
-  return '#94a3b8';
+function categoryFor(type = '') {
+  const match = CATEGORY_RULES.find((rule) => rule.test(type));
+  return match || { color: 'var(--cat-default)', Icon: Box };
 }
 
-function ResourceNode({ data, id }) {
-  const color = colorForType(data.type);
+function ResourceNode({ data }) {
+  const { color, Icon } = categoryFor(data.type);
+  // Previously this was tied to live zoom level (hidden below a threshold),
+  // but fitView settles at a different zoom for every template — dense
+  // graphs zoom out further to fit, sparse ones zoom in more — so any fixed
+  // number worked for some templates and broke for others. The type line is
+  // already truncated with an ellipsis (.iac-truncate), so it's safe to
+  // always render; it just gets small at low zoom, same as the label above it.
+
   const isSelected = data.__selected;
   const isDirect = data.__direct;
   const isIndirect = data.__indirect;
   const isDimmed = data.__dimmed;
   const hasFlag = data.__hasFlag;
 
-  let border = `2px solid ${color}`;
-  let boxShadow = '0 1px 3px rgba(0,0,0,0.08)';
-  let opacity = 1;
-
-  if (isSelected) {
-    border = '3px solid #0f172a';
-    boxShadow = '0 0 0 4px rgba(15,23,42,0.12)';
-  } else if (isDirect) {
-    border = '3px solid #ef4444';
-    boxShadow = '0 0 0 4px rgba(239,68,68,0.15)';
-  } else if (isIndirect) {
-    border = '3px solid #f97316';
-    boxShadow = '0 0 0 4px rgba(249,115,22,0.12)';
-  }
-
-  if (isDimmed) opacity = 0.35;
+  const ringColor = isSelected
+    ? 'var(--signal)'
+    : isDirect
+    ? 'var(--risk-direct)'
+    : isIndirect
+    ? 'var(--risk-indirect)'
+    : 'var(--border-hairline)';
 
   return (
     <div
+      className={clsx(
+        'iac-node',
+        (isSelected || isDirect) && 'radar-pulse',
+        isSelected && 'radar-pulse--selected',
+        isDirect && 'radar-pulse--direct'
+      )}
       style={{
-        background: 'white',
-        border,
-        borderLeft: `6px solid ${color}`,
-        borderRadius: 8,
-        padding: '8px 12px',
-        width: 180,
-        boxShadow,
-        opacity,
-        fontFamily: 'system-ui, sans-serif',
-        cursor: 'grab',
-        transition: 'box-shadow 120ms, opacity 120ms',
-        position: 'relative',
+        background: 'var(--bg-surface)',
+        border: `1.5px solid ${ringColor}`,
+        borderLeft: `4px solid ${color}`,
+        boxShadow:
+          isSelected || isDirect || isIndirect ? `0 0 0 3px ${ringColor}22` : '0 1px 2px rgba(0,0,0,0.3)',
+        opacity: isDimmed ? 0.3 : 1,
       }}
     >
       {hasFlag && (
-        <div
-          style={{
-            position: 'absolute',
-            top: -8,
-            right: -8,
-            background: '#dc2626',
-            color: 'white',
-            fontSize: 10,
-            fontWeight: 700,
-            borderRadius: 10,
-            padding: '1px 6px',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-          }}
-        >
-          ⚠
+        <div className="iac-node-flag">
+          <TriangleAlert size={11} color="#0a0f1c" strokeWidth={2.5} />
         </div>
       )}
-      <Handle type="target" position={Position.Left} style={{ background: color }} />
-      <div style={{ fontSize: 12, fontWeight: 600, color: '#0f172a' }}>{data.label}</div>
-      <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>{data.type}</div>
-      <Handle type="source" position={Position.Right} style={{ background: color }} />
+
+      <Handle type="target" position={Position.Left} style={{ background: color, width: 9, height: 9 }} />
+
+      <div className="iac-node-body">
+        <div className="iac-node-icon" style={{ background: `${color}22`, color }}>
+          <Icon size={12} strokeWidth={2.25} />
+        </div>
+        <div className="iac-node-text">
+          <div className="iac-node-label iac-truncate" style={{ color: 'var(--text-primary)' }} title={data.label}>
+            {data.label}
+          </div>
+          <div className="iac-node-type iac-truncate" style={{ color: 'var(--text-tertiary)' }} title={data.type}>
+            {data.type}
+          </div>
+        </div>
+      </div>
+
+      <Handle type="source" position={Position.Right} style={{ background: color, width: 9, height: 9 }} />
     </div>
   );
 }
@@ -114,9 +131,12 @@ export default function FlowDiagram({
   onConnectEnd,
   directIds = [],
   indirectIds = [],
+  isFocusMode = false,
+  onToggleFocus,
 }) {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState([]);
   const [rfEdges, setRfEdges, onEdgesChange] = useEdgesState([]);
+  const [rfInstance, setRfInstance] = useState(null);
 
   const directSet = useMemo(() => new Set(directIds), [directIds]);
   const indirectSet = useMemo(() => new Set(indirectIds), [indirectIds]);
@@ -142,22 +162,32 @@ export default function FlowDiagram({
 
   useEffect(() => {
     setRfEdges(
-      edges.map((e) => {
-        const isHypo = e.data?.hypothetical === true;
-        return {
-          ...e,
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            color: isHypo ? '#f59e0b' : '#94a3b8',
-          },
-        };
-      })
+      edges.map((e) => ({
+        ...e,
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: e.data?.hypothetical ? 'var(--signal)' : '#4b5875',
+          width: 16,
+          height: 16,
+        },
+      }))
     );
   }, [edges, setRfEdges]);
 
+  const minimapNodeColor = (n) => categoryFor(n.data?.type || '').color;
+
+  // Re-center the graph whenever the canvas gains or loses the surrounding
+  // chrome, so entering/exiting fullscreen actually uses the new space
+  // instead of leaving the diagram pinned to its old position.
+  useEffect(() => {
+    if (!rfInstance) return;
+    const id = requestAnimationFrame(() => rfInstance.fitView({ padding: 0.25, duration: 200 }));
+    return () => cancelAnimationFrame(id);
+  }, [isFocusMode, rfInstance]);
+
   return (
-    <div style={{ width: '100%', height: '100%', background: '#f8fafc' }}>
-           <ReactFlow
+    <div style={{ width: '100%', height: '100%', background: 'var(--bg-canvas)' }}>
+      <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
         onNodesChange={onNodesChange}
@@ -168,12 +198,32 @@ export default function FlowDiagram({
         onConnect={(params) => onConnect?.(params)}
         onConnectStart={(_, params) => onConnectStart?.(params)}
         onConnectEnd={() => onConnectEnd?.()}
+        connectionMode="loose"
+        minZoom={0.15}
+        maxZoom={2}
         fitView
+        fitViewOptions={{ padding: 0.25 }}
         proOptions={{ hideAttribution: true }}
+        onInit={setRfInstance}
       >
-        <Background color="#e2e8f0" gap={20} />
-        <Controls />
-        <MiniMap pannable zoomable />
+        <Background variant={BackgroundVariant.Dots} color="#1c2740" gap={22} size={1.5} />
+        <Controls showInteractive={false} />
+        <MiniMap
+          pannable
+          zoomable
+          nodeColor={minimapNodeColor}
+          nodeStrokeWidth={0}
+          maskColor="rgba(10,15,28,0.75)"
+        />
+        <Panel position="top-right">
+          <button
+            onClick={onToggleFocus}
+            className="iac-focus-btn"
+            title={isFocusMode ? 'Exit fullscreen' : 'Fill screen with diagram'}
+          >
+            {isFocusMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
+        </Panel>
       </ReactFlow>
     </div>
   );
