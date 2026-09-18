@@ -8,6 +8,7 @@ import TemplateInput from './components/TemplateInput.jsx';
 import FlowDiagram from './components/FlowDiagram.jsx';
 import { layoutGraph } from './lib/layout.js';
 import { computeBlastRadius } from './lib/blastRadius.js';
+import { explainFlag } from './lib/ruleExplanations.js';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://j04hh0pkgd.execute-api.us-east-1.amazonaws.com';
 
@@ -294,6 +295,39 @@ export default function App() {
 
   const selectedNode = selectedId ? rawGraph.nodes.find((n) => n.id === selectedId) : null;
   const selectedFlags = selectedId ? flagsByResource.get(selectedId) || [] : [];
+
+  // Nobody else joins "how bad is this flag" with "how much does it touch" —
+  // severity alone doesn't tell you which fix to prioritize first. Score =
+  // severity weight + how many resources are downstream of the flagged one,
+  // so a high-severity flag on a load-bearing resource always outranks the
+  // same severity on an isolated one.
+  const topRisks = useMemo(() => {
+    if (flags.length === 0) return [];
+    const severityWeight = { high: 2, medium: 1, low: 0 };
+    return flags
+      .map((f) => {
+        const radius = computeBlastRadius(filteredGraph.edges, f.resourceId);
+        return {
+          ...f,
+          blastTotal: radius.total,
+          score: (severityWeight[f.severity] ?? 0) * 100 + radius.total,
+        };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+  }, [flags, filteredGraph.edges]);
+
+  // Dollar exposure behind the current selection — "3 resources affected"
+  // and "$41/mo affected" are different questions, and only one of them
+  // gets a budget conversation started.
+  const blastCost = useMemo(() => {
+    if (!selectedId || !cost?.breakdown?.length) return null;
+    const affectedIds = new Set([...blast.direct, ...blast.indirect]);
+    const total = cost.breakdown
+      .filter((b) => affectedIds.has(b.id))
+      .reduce((sum, b) => sum + b.monthly, 0);
+    return total > 0 ? total : null;
+  }, [selectedId, blast, cost]);
 
   return (
     <div
@@ -598,6 +632,59 @@ export default function App() {
             </div>
           )}
 
+          {topRisks.length > 0 && (
+            <div
+              style={{
+                padding: '10px 16px',
+                background: 'rgba(239,68,68,0.08)',
+                borderBottom: '1px solid rgba(239,68,68,0.25)',
+                fontSize: 12,
+              }}
+            >
+              <div style={{ fontWeight: 700, color: 'var(--text-primary, #e2e8f0)', marginBottom: 6 }}>
+                🔥 Highest-impact issues
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {topRisks.map((r, i) => (
+                  <button
+                    key={`${r.resourceId}-${r.ruleId}-${i}`}
+                    onClick={() => setSelectedId(r.resourceId)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      padding: '3px 0',
+                      cursor: 'pointer',
+                      color: 'var(--text-secondary, #b6c2d9)',
+                      fontSize: 12,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        padding: '1px 6px',
+                        borderRadius: 4,
+                        background: r.severity === 'high' ? 'rgba(239,68,68,0.2)' : 'rgba(217,119,6,0.2)',
+                        color: r.severity === 'high' ? '#fca5a5' : '#fbbf24',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {r.severity.toUpperCase()}
+                    </span>
+                    <strong style={{ color: 'var(--text-primary, #e2e8f0)' }}>{r.resourceId}</strong>
+                    <span style={{ color: 'var(--text-tertiary, #7a88a8)' }}>
+                      — {r.blastTotal} resource{r.blastTotal !== 1 ? 's' : ''} downstream
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {rawGraph.nodes.length > 0 &&
             hypotheticalEdges.length === 0 &&
             deletedNodes.length === 0 && (
@@ -717,6 +804,11 @@ export default function App() {
                   <div>
                     <strong>{blast.indirect.length}</strong> indirect
                   </div>
+                  {blastCost !== null && (
+                    <div style={{ marginTop: 4, color: '#fbbf24' }}>
+                      <strong>~${blastCost.toFixed(2)}/mo</strong> across affected resources
+                    </div>
+                  )}
                 </div>
                 {blast.direct.length > 0 && (
                   <div style={{ marginTop: 8, fontSize: 10, color: 'var(--text-tertiary, #7a88a8)' }}>
@@ -796,6 +888,32 @@ export default function App() {
                     >
                       {f.message}
                     </div>
+                    {(() => {
+                      const { why, docUrl } = explainFlag(f);
+                      return (
+                        <div
+                          style={{
+                            marginTop: 6,
+                            paddingTop: 6,
+                            borderTop: '1px solid rgba(255,255,255,0.08)',
+                            fontSize: 10.5,
+                            color: 'var(--text-tertiary, #7a88a8)',
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          <strong style={{ color: 'var(--text-secondary, #b6c2d9)' }}>Why this matters: </strong>
+                          {why}{' '}
+                          <a
+                            href={docUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: 'var(--signal, #6366f1)' }}
+                          >
+                            Learn more →
+                          </a>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ))}
               </div>
