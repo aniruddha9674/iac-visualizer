@@ -7,7 +7,6 @@ Know what breaks before you change it.
 ![React](https://badgen.net/badge/UI/React%20%2B%20Vite/61DAFB)
 ![SAM](https://badgen.net/badge/Deploy/AWS%20SAM/FF9900)
 ![Static](https://badgen.net/badge/Analysis/static%20only/2EA44F)
-![License](https://badgen.net/badge/License/MIT/blue)
 ![test](https://github.com/aniruddha9674/iac-visualizer/actions/workflows/test.yml/badge.svg)
 
 [Try it →](https://main.dm50udtc9sqd0.amplifyapp.com/)
