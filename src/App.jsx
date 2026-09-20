@@ -1164,6 +1164,47 @@ export default function App() {
                           {blast.total} of {filteredGraph.nodes.length} resources ·{' '}
                           {blast.direct.length} direct, {blast.indirect.length} indirect
                         </div>
+                        {blast.direct.length > 0 && (
+  <div className="iac-blast-list">
+    <div className="iac-blast-list-head">Direct</div>
+    {blast.direct.map((id) => {
+      const edge = filteredGraph.edges.find(
+        (e) => e.source === id && e.target === selectedId
+      );
+      return (
+        <div key={id} className="iac-blast-list-row">
+          <button
+            type="button"
+            className="iac-ref-link"
+            onClick={() => setSelectedId(id)}
+          >
+            {id}
+          </button>
+          {edge?.path && (
+            <span className="iac-ref-path"> — {edge.path}</span>
+          )}
+        </div>
+      );
+    })}
+  </div>
+)}
+
+{blast.indirect.length > 0 && (
+  <div className="iac-blast-list">
+    <div className="iac-blast-list-head">Indirect</div>
+    {blast.indirect.map((id) => (
+      <div key={id} className="iac-blast-list-row">
+        <button
+          type="button"
+          className="iac-ref-link"
+          onClick={() => setSelectedId(id)}
+        >
+          {id}
+        </button>
+      </div>
+    ))}
+  </div>
+)}
                         {blastCost !== null && (
                           <div className="iac-blast-cost">
                             <strong>~${blastCost.toFixed(2)}/mo</strong> across affected resources

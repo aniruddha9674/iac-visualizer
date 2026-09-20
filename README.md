@@ -1,176 +1,151 @@
-
-# IaC Visualizer
+# iac-visualizer
 
 ![test](https://github.com/aniruddha9674/iac-visualizer/actions/workflows/test.yml/badge.svg)
 
-**Live demo:** https://main.dm50udtc9sqd0.amplifyapp.com/
-
-A tool that parses CloudFormation templates into a dependency graph, computes the transitive blast radius of any resource, runs deterministic misconfiguration rules, estimates monthly cost, and uses Amazon Bedrock to narrate the findings in plain English.
-
-Built solo for **First Commit** (WeMakeDevs Bharat Builds Tour, September 17–20, 2026).
+**[Try it →](https://main.dm50udtc9sqd0.amplifyapp.com/)**
 
 ---
 
-## The problem
+I spent two days reading a 400-line CloudFormation template before I understood what it deployed. Not because the YAML was hard. Because nothing told me which resources depended on which other resources, and I didn't want to change the wrong thing.
 
-When you change or delete a resource in a CloudFormation template, nothing tells you what else breaks. Change sets show one-hop actions on the resources being changed. cfn-lint and Checkov check properties in isolation. Infrastructure Composer and cfn-diagram draw the graph but don't compute impact.
+Change sets show one hop. cfn-lint checks each resource individually. Infrastructure Composer draws the picture but doesn't compute impact. So I built the missing piece: paste a template, click a resource, see everything that transitively depends on it.
 
-None of them answer the question every engineer asks before touching a template: **if I change this resource, what transitively depends on it?**
+This is what it looks like:
+$ iac check template.yaml
 
-This tool does.
+Template: ./template.yaml
+Graph: 28 resources, 41 dependencies
+
+Flags (7):
+[HIGH ] AppSecurityGroup — Security group opens port(s) 22-22 to the public internet.
+[HIGH ] AppDatabase — RDS instance is publicly accessible from the internet.
+[HIGH ] JobProcessor — references UploadsBucket (AWS::S3::Bucket), but its
+execution role (JobProcessorRole) grants no 's3:' permissions.
+This will fail at runtime with AccessDenied.
+[HIGH ] JobProcessorRole — IAM statement grants wildcard Resource.
+[MEDIUM] UploadsBucket — S3 bucket has no PublicAccessBlockConfiguration.
+[MEDIUM] LogsBucket — S3 bucket has no PublicAccessBlockConfiguration.
+[MEDIUM] AppDataVolume — EBS volume is not encrypted at rest.
+
+text
+
+The `PERMISSION_NOT_GRANTED` flag is the one that doesn't exist in any other tool. It cross-references two resources: the Lambda, the bucket it reads from, and the IAM role in between. cfn-lint can't find this because each resource is individually valid.
 
 ---
 
 ## What it does
 
-**Blast radius.** Click any resource in the diagram. The tool runs reverse BFS over the dependency graph and shows every resource that transitively depends on it — direct and indirect, with a total count.
+**Blast radius.** Click any resource in the graph. Reverse BFS over the dependency edges shows every resource that transitively depends on it — direct and indirect, with the property path that creates each edge. `WebServer — Properties.SecurityGroupIds[0]`.
 
-**Sandbox mode.** Drag a hypothetical edge between two resources to see what the blast radius *would* be. Simulate deleting a node to see what would break. Neither operation touches the template.
+**Sandbox mode.** Drag a hypothetical edge between two resources to see what the blast radius *would* be if the dependency existed. Simulate deleting a resource. Neither touches the template.
 
-**Six deterministic rules.** Security groups open to `0.0.0.0/0` on sensitive ports, S3 buckets missing public access blocks, IAM wildcards, RDS instances marked publicly accessible, unencrypted EBS volumes, and over-scoped IAM actions. Same template in, same flags out, every time.
+**Eight deterministic rules.** Open security groups on sensitive ports, S3 buckets without public access blocks, IAM wildcards, managed policies like `AdministratorAccess`, RDS instances marked publicly accessible, unencrypted EBS volumes, wildcard actions on scoped resources, and the Lambda-permission-mismatch rule described above. Same template in, same flags out. No LLM in the detection path.
 
-**Cost estimate.** A per-resource monthly cost heuristic. Not a bill — the UI says so. But it answers the question reviewers actually ask that CloudFormation never tells you.
+**AI narration.** Bedrock's Nova Micro explains the flags in plain English. It's downstream of the rule engine — it narrates what was computed deterministically, it doesn't invent new findings. Ask follow-up questions grounded in the parsed graph.
 
-**AI narration.** Amazon Nova Micro via Bedrock explains the flags in plain English. The model is downstream of the analysis — it explains results that were computed deterministically. It doesn't generate them.
-
-**Q&A.** After generating a summary, ask free-form questions grounded in the parsed graph.
+**Cost estimate.** A flat lookup table of monthly USD per resource type. It's a heuristic and the UI says so, but it answers a question CloudFormation never tells you.
 
 ---
 
-## Why CloudFormation and not Terraform
+## How it works
 
-This isn't a tool for people who love CloudFormation. It's a tool for people who have to read it. Every engineer working in AWS eventually inherits a CFN template — a vendor deliverable, a legacy stack, a CDK-synthesized artifact, a PR from a team that hasn't migrated. Terraform has `terraform graph` and `terraform plan`. CloudFormation has change sets, which are one-hop, and no graph view at all.
-
-The tool exists because CloudFormation is what you *have to read*, not what you choose to write.
-
----
-
-## Architecture
-
-```
+The whole tool is three Lambda functions behind one API Gateway HTTP API:
 Browser (Amplify Hosting)
-        │
-        ▼
-API Gateway HTTP API  ──►  Lambda /parse    ──►  Parser + BFS + Rules + Cost
-                      ──►  Lambda /analyze  ──►  Bedrock (Nova Micro)
-                      ──►  Lambda /ask      ──►  Bedrock (Nova Micro)
-```
+│
+▼
+API Gateway HTTP API ──► Lambda /parse ──► Parser + BFS + Rules + Cost
+──► Lambda /analyze ──► Bedrock (Nova Micro)
+──► Lambda /ask ──► Bedrock (Nova Micro)
 
-**Backend:** Node.js 20, ARM64 Lambdas, deployed via AWS SAM. Three functions behind one API Gateway HTTP API. Stateless — nothing persisted between requests.
+text
 
-**Frontend:** React 19 + Vite. React Flow for the diagram, dagre for layout. Hosted on AWS Amplify.
+The parser is the interesting part. CloudFormation's `!Ref`, `!GetAtt`, and `!Sub` are not YAML. Every standard parser throws `unknown tag` on a real template. This one uses `js-yaml-cloudformation-schema` to convert intrinsics into their JSON equivalents, then walks every resource's properties looking for four reference patterns.
 
-**AI:** Amazon Bedrock, model `amazon.nova-micro-v1:0`. Chosen over Claude Haiku for cost (7x cheaper) and because it's a first-party Amazon model that avoids AWS Marketplace subscription requirements on AISPL accounts.
+The critical detail: every extracted name is filtered against the actual resource list before becoming an edge. Without that filter, `AWS::StackName`, parameter names like `${Environment}`, and condition names like `IsProd` all become fake nodes. The graph is only correct because of one `Set.has()` call.
 
-See [`docs/BACKEND.md`](docs/BACKEND.md) for the full backend reference.
+Same BFS algorithm runs on the client, so clicking a node updates the panel without a network round-trip. The backend version exists for the CLI and for future server-side consumers.
+
+Full backend documentation: [`docs/BACKEND.md`](docs/BACKEND.md).
 
 ---
 
-## Tech stack
+## Stack
 
-| Layer | Choice |
-|---|---|
-| Frontend | React 19, Vite, React Flow, dagre, lucide-react |
-| Backend | Node.js 20, CommonJS |
-| IaC deploy | AWS SAM, CloudFormation |
-| Compute | AWS Lambda (ARM64) |
+| Frontend | React 19, Vite, React Flow, dagre |
+| Backend | Node.js 20 on Lambda (ARM64), CommonJS |
 | API | API Gateway HTTP API |
-| AI | Amazon Bedrock (Nova Micro) |
+| AI | Amazon Bedrock, Nova Micro |
 | Hosting | AWS Amplify |
-| YAML parsing | js-yaml + js-yaml-cloudformation-schema |
-| Tests | Custom Node script (7 checks) + GitHub Actions |
+| Deploy | AWS SAM |
+| Parsing | js-yaml + js-yaml-cloudformation-schema |
+
+Bedrock runs on Nova Micro rather than Claude because AISPL (AWS India) accounts hit a Marketplace subscription gate on Anthropic models. Nova is first-party, doesn't need the subscription, and costs 7x less. For narrating pre-computed flags, the bigger model buys nothing.
 
 ---
 
-## What it's capable of
-
-- Parses CloudFormation YAML with all standard intrinsic functions — `!Ref`, `!GetAtt`, `!Sub`, `!Join`, `!Select`, `!GetAZs`, `!ImportValue`, `!If`, `!FindInMap`, and more
-- Builds a correct dependency graph from `Ref`, `GetAtt`, `Sub`, and `DependsOn` references, with filtering so pseudo-parameters and condition names don't create fake edges
-- Computes transitive blast radius in under a millisecond for templates up to a few hundred resources
-- Detects six categories of misconfiguration deterministically
-- Explores hypothetical graph modifications without touching the template
-- Narrates findings in plain English via Bedrock
-
----
-
-## What it doesn't do
-
-- **Cross-stack references.** `Fn::ImportValue` into another template isn't followed. Each template is analyzed in isolation.
-- **SAM transform expansion.** `AWS::Serverless::Function` is shorthand. The parser sees one node; the deployed stack has four or more.
-- **Live AWS account scanning.** Static template analysis only.
-- **Diff mode.** One snapshot at a time.
-- **Auto-fix.** It flags issues. The changes belong in your repo, reviewed in a PR.
-- **Managed policy ARNs.** Rules check inline `Policies` blocks; `ManagedPolicyArns` entries aren't expanded.
-
----
-
-## Running locally
+## Using it locally
 
 ```bash
 git clone https://github.com/aniruddha9674/iac-visualizer.git
 cd iac-visualizer
 npm install
 npm run dev
-```
+Opens at http://localhost:5173. The frontend points at the deployed API by default.
 
-Opens at `http://localhost:5173`. The frontend defaults to the deployed API; to point it at your own backend, create `.env.local`:
+For the CLI, from the repo root:
 
-```
-VITE_API_URL=https://<your-api-gateway-url>
-```
+bash
+cd cli
+npm link            # makes the `iac` command available globally
+cd ..
 
-Run the backend tests:
+iac check template.yaml
+iac check template.yaml --blast VPC
+iac check template.yaml --json
+iac check template.yaml --fail-on medium
+Exit codes: 0 if no flags at or above the threshold, 1 if there are, 2 for usage errors.
 
-```bash
-node scripts/test.cjs
-```
+Run the test suites:
 
-Expected: `7 passed, 0 failed`.
+bash
+node scripts/test.cjs    # 8 checks
+node cli/test.cjs        # 8 checks
+What it doesn't do
+Cross-stack references. Fn::ImportValue into another template isn't followed. The graph is single-template. Multi-stack repos where stack B imports a subnet ID from stack A won't show the dependency.
 
----
+SAM transform expansion. AWS::Serverless::Function expands into a Lambda, an IAM role, event source mappings, and permission resources at deploy time. The parser sees one node. A SAM template's graph under-represents the deployed architecture.
 
-## Deploying
+Managed policies by content. IAM_MANAGED_POLICY_OVERPERMISSIVE matches on policy name (*FullAccess, AdministratorAccess). It doesn't expand the actual statements of a custom customer-managed policy.
 
-**Backend:**
+PERMISSION_NOT_GRANTED is scoped to S3. The resource-to-IAM-prefix map currently only includes AWS::S3::Bucket. Extending it to DynamoDB, SQS, and SNS is a one-line change per resource type.
 
-```bash
-cd infra
-sam build
-sam deploy --guided
-```
+Live AWS access. Static template analysis only. No account scanning, no drift detection, no deployed-state comparison.
 
-**Frontend:** connect the repo to AWS Amplify. Amplify detects Vite. Set `VITE_API_URL` to your API Gateway URL in the Amplify console.
+Auto-fix. It flags issues. The changes belong in your repo, reviewed in a PR.
 
----
+What fought back
+js-yaml-cloudformation-schema returns Fn::GetAtt as a string ("Foo.Arn") when written as !GetAtt Foo.Arn, but as an array (["Foo", "Arn"]) when written as !GetAtt [Foo, Arn]. A parser that only handles one form silently loses edges on real templates. The test suite caught this — s3-lambda.yaml produced 2 edges instead of 3, and the missing one was a !GetAtt in a Lambda's Role property.
 
-## What I learned
+Amplify's build failed twice before I understood why. npm ci reads the lockfile, not package.json. The lockfile was stale from a previous install and didn't include @dagrejs/dagre, so the build threw Rolldown failed to resolve import "@dagrejs/dagre" even though the package was in the manifest. Fix: rm package-lock.json && npm install.
 
-- CloudFormation's intrinsic tags are not YAML. Every standard parser breaks on `!Ref`. This is the first thing you discover when you parse a real template.
-- The critical piece of the parser is one line: filtering extracted reference names against the resource list. Without it, `AWS::StackName`, parameters, and conditions all become fake nodes. The graph is only correct because of that filter.
-- SAM's transform means the parser would be lying. `AWS::Serverless::Function` expands into four-plus real resources at deploy time. A parser that shows the shorthand isn't showing the deployed architecture. That's why SAM support was cut, not because it's hard.
-- `js-yaml-cloudformation-schema` returns `Fn::GetAtt` as a **string** (`"Foo.Arn"`) not an array. A parser that only handles the array form silently loses edges on real templates. The test suite caught this.
-- Bedrock needs inference profiles for newer Claude models but not for Nova. AISPL (AWS India) accounts hit AWS Marketplace subscription gates on Anthropic models. Amazon's first-party models work without.
-- `npm ci` reads the lockfile, not `package.json`. A stale lockfile breaks the Amplify build even when the manifest is correct.
+Bedrock on AISPL accounts doesn't work with Anthropic models the way the docs imply. The error INVALID_PAYMENT_INSTRUMENT is what you get when the account is registered under AWS India's billing entity and Claude tries to initiate a Marketplace subscription. Nova Micro doesn't need one because it's a first-party model.
 
----
+npm link on Windows requires admin privileges. npm install -g . from the CLI directory works without. Same effect, no UAC prompt.
 
-## Future work
+SAM's transform means AWS::Serverless::Function is not a real CloudFormation resource — it's a macro input that expands at deploy time. The parser sees one node; the deployed stack has four or more. That's why SAM support was cut, not because the parser is hard to extend, but because a graph that shows the shorthand isn't showing the deployed architecture.
 
-Ordered by impact.
+Where this goes next
+Ordered by what I'd actually build.
 
-1. **PR integration.** A GitHub Action that runs the parser on a PR diff and comments the blast radius as a review comment. The analysis engine exists; the integration is a wrapper. This is where the tool belongs — reviewers don't open browser tabs mid-review.
-2. **Cross-stack resolution.** Parse multiple templates at once, resolve `Fn::ImportValue` against `Outputs.*.Export.Name` declarations, build one combined graph.
-3. **Drift detection overlay.** Read-only integration with `DetectStackDrift` and `DescribeStackResourceDrifts` to highlight resources that have diverged from the template. Combined with blast radius, answers "what's downstream of drifted infrastructure" — a question no existing tool addresses.
-4. **Suggested fixes for each flag.** Every rule gets a `fix` field. Turns "here's a problem" into "here's the change."
-5. **VPC/subnet boundary grouping.** React Flow supports parent/child nodes. Nesting subnets inside their VPC as a bounding box would make large templates dramatically more legible.
-6. **Terraform support.** The graph model is language-agnostic. Terraform would need a second parser (HCL), a second resource-type mapping, and a second rules engine. Estimated 2–3 days.
+GitHub Action. Run the parser on a PR diff and post the blast radius as a review comment. The analysis engine exists; the integration is a wrapper. Reviewers don't open browser tabs mid-review.
 
----
+Cross-stack resolution. Parse every template in a repo, resolve Fn::ImportValue against Outputs.*.Export.Name declarations, build one combined graph. This is the feature that turns the tool from "useful for one stack" into "useful for a monorepo."
 
-## AI tools used
+Drift detection. Read-only DetectStackDrift and DescribeStackResourceDrifts calls, overlaid on the graph. Combined with blast radius, this answers "what's downstream of drifted infrastructure" — a question nothing currently addresses.
 
-- **Claude (Anthropic)** — architecture discussion, code review, debugging. Not used for the parser, the BFS, or the rule engine — those were written, tested, and debugged manually against the fixtures.
-- **Amazon Nova Micro via Bedrock** — embedded in the product. Narrates pre-computed flags and answers Q&A over the parsed graph.
+Suggested fixes. Every rule gets a fix field. "Replace CidrIp: 0.0.0.0/0 with a bastion CIDR." Turns "here's a problem" into "here's the change."
 
----
+Terraform. The graph model and BFS are language-agnostic. Terraform needs a second parser (HCL), a second resource-type mapping, and a second rules engine. Estimated 2–3 days. CloudFormation first because the tooling gap is bigger — terraform graph and terraform plan already exist.
 
+Built for
+First Commit, WeMakeDevs Bharat Builds Tour, September 17–20 2026. Solo. Ship It track.
